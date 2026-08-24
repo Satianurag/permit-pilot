@@ -63,11 +63,14 @@ def ensure_cloud_clerks(store: FirestoreStore) -> None:
 def _clerks_from_firestore(rows: list[dict[str, object]]) -> dict[str, ClerkUserInDB]:
     users: dict[str, ClerkUserInDB] = {}
     for row in rows:
-        username = str(row["username"])
+        username = str(row.get("username") or "")
+        hashed = str(row.get("hashed_password") or "")
+        if not username or not hashed:
+            continue
         users[username] = ClerkUserInDB(
             username=username,
-            full_name=str(row["full_name"]),
+            full_name=str(row.get("full_name") or username),
             role=str(row.get("role") or "clerk"),
-            hashed_password=str(row["hashed_password"]),
+            hashed_password=hashed,
         )
     return users

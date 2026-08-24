@@ -1,57 +1,112 @@
-import { useCallback, useEffect, useId, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { KeyboardEvent, useCallback, useEffect, useId, useState } from "react";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import ConfirmDialog from "../components/ConfirmDialog";
 import EmptyState from "../components/EmptyState";
+import ModalDialog from "../components/ModalDialog";
+import Skeleton from "../components/Skeleton";
 import { StatusBadge } from "../components/StatusBadge";
 import TraceReplay from "../components/TraceReplay";
-import { api, Case, CaseBundle, Claim, DepartmentReview } from "../lib/api";
+import { api, Case, CaseBundle, Claim, DepartmentReview, Task } from "../lib/api";
+import { getStoredUser, isAdmin } from "../lib/auth";
+import { readBriefing, writeBriefing } from "../lib/briefingCache";
 import { errorMessage } from "../lib/errors";
 import { formatStatus } from "../lib/formatStatus";
 
 const TABS = ["summary", "distribution", "documents", "claims", "audit"] as const;
 type Tab = (typeof TABS)[number];
-const TERMINAL_STATUSES = new Set(["approved", "changes_requested"]);
+const TERMINAL = new Set(["approved", "changes_requested"]);
+
+function isTab(value: string | null): value is Tab {
+  return TABS.includes(value as Tab);
+}
 
 export default function CasePage() {
   const { id } = useParams();
   const caseId = id!;
   const tabsId = useId();
-  const [tab, setTab] = useState<Tab>("summary");
+  const navigate = useNavigate();
+  const [params, setParams] = useSearchParams();
+  const tab: Tab = isTab(params.get("tab")) ? (params.get("tab") as Tab) : "summary";
+  const from = params.get("from") === "search" ? "search" : "tasks";
   const [bundle, setBundle] = useState<CaseBundle | null>(null);
   const [selected, setSelected] = useState<DepartmentReview | null>(null);
   const [claimText, setClaimText] = useState("");
   const [responseText, setResponseText] = useState("");
   const [respondingClaimId, setRespondingClaimId] = useState<string | null>(null);
   const [note, setNote] = useState("");
-  const [briefing, setBriefing] = useState<string | null>(null);
+  const [briefing, setBriefing] = useState<string | null>(() => readBriefing(caseId));
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [approveOpen, setApproveOpen] = useState(false);
+  const [changesOpen, setChangesOpen] = useState(false);
+  const [nextTask, setNextTask] = useState<Task | null>(null);
+  const admin = isAdmin(getStoredUser());
 
-  const load = useCallback(() => {
-    setLoading(true);
-    setError(null);
-    api
-      .getCaseBundle(caseId)
-      .then((data) => {
-        setBundle(data);
-      })
-      .catch((err: Error) => setError(err.message))
-      .finally(() => setLoading(false));
+  const setTab = (name: Tab) => {
+    const next = new URLSearchParams(params);
+    next.set("tab", name);
+    setParams(next, { replace: true });
+  };
+
+  const onTabKey = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (!["ArrowRight", "ArrowLeft", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const i = TABS.indexOf(tab);
+    let next = i;
+    if (event.key === "ArrowRight") next = (i + 1) % TABS.length;
+    if (event.key === "ArrowLeft") next = (i - 1 + TABS.length) % TABS.length;
+    if (event.key === "Home") next = 0;
+    if (event.key === "End") next = TABS.length - 1;
+    setTab(TABS[next]);
+    document.getElementById(`${tabsId}-${TABS[next]}`)?.focus();
+  };
+
+  const requireNote = () => {
+    if (note.trim()) return true;
+    setError("Clerk note is required for the audit trail");
+    document.getElementById("clerk-note")?.focus();
+    return false;
+  };
+
+  const load = useCallback(
+    (silent = false) => {
+      if (!silent) setLoading(true);
+      setError(null);
+      api
+        .getCaseBundle(caseId)
+        .then(setBundle)
+        .catch((err: Error) => setError(err.message))
+        .finally(() => setLoading(false));
+    },
+    [caseId],
+  );
+
+  useEffect(() => load(), [load]);
+
+  useEffect(() => {
+    setBriefing(readBriefing(caseId));
+    setNextTask(null);
   }, [caseId]);
 
-  useEffect(load, [load]);
-
   const caseData: Case | null = bundle?.case ?? null;
-  const canDecide = caseData && !TERMINAL_STATUSES.has(caseData.status);
+  const canDecide = Boolean(caseData && !TERMINAL.has(caseData.status));
+  const failed = bundle?.distribution.filter((row) => row.status === "fail") ?? [];
+  const checking = bundle?.distribution.some((row) => row.status === "checking") ?? false;
+  const stalled = bundle?.workflow.some((step) => step.status === "failed" || step.status === "interrupted") ?? false;
+
+  useEffect(() => {
+    if (!checking) return;
+    const timer = window.setInterval(() => load(true), 4000);
+    return () => window.clearInterval(timer);
+  }, [checking, load]);
 
   const runAction = async (key: string, action: () => Promise<void>) => {
     setBusy(key);
     setError(null);
     try {
       await action();
-      load();
+      load(true);
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -59,41 +114,18 @@ export default function CasePage() {
     }
   };
 
-  const refreshDistribution = () =>
-    runAction("refresh", async () => {
-      await api.refreshDistribution(caseId);
-    });
-
-  const submitClaim = () =>
-    runAction("claim", async () => {
-      if (!claimText.trim()) throw new Error("Enter a document request for the applicant");
-      await api.createClaim(caseId, claimText.trim());
-      setClaimText("");
-    });
-
-  const submitResponse = (claimId: string) =>
-    runAction(`respond-${claimId}`, async () => {
-      if (!responseText.trim()) throw new Error("Enter the applicant response received");
-      await api.respondToClaim(caseId, claimId, responseText.trim());
-      setResponseText("");
-      setRespondingClaimId(null);
-    });
-
-  const generateBriefing = () =>
-    runAction("briefing", async () => {
-      const result = await api.orchestrate(caseId);
-      setBriefing(result.summary);
-    });
-
-  const decide = (decision: string) =>
+  const decide = (decision: string, override = false) =>
     runAction("decide", async () => {
-      if (!note.trim()) throw new Error("Clerk note is required for audit");
-      await api.decide(caseId, decision, note.trim());
+      if (!note.trim()) throw new Error("Clerk note is required for the audit trail");
+      await api.decide(caseId, decision, note.trim(), override);
       setApproveOpen(false);
+      setChangesOpen(false);
+      const queue = await api.listTasks("open");
+      setNextTask(queue.find((task) => task.case_id !== caseId) ?? null);
     });
 
   if (loading && !bundle) {
-    return <p className="text-slate-600">Loading case…</p>;
+    return <Skeleton rows={8} label="Loading case" />;
   }
 
   if (!caseData) {
@@ -101,11 +133,14 @@ export default function CasePage() {
   }
 
   return (
-    <div className="space-y-4 pb-28">
+    <div className={`space-y-4 ${canDecide ? "pb-36" : ""}`}>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <Link to="/tasks" className="text-sm text-pp-accent hover:underline">
-            ← Back to tasks
+          <Link
+            to={from === "search" ? "/permits" : "/tasks"}
+            className="text-sm text-pp-accent hover:underline"
+          >
+            ← Back to {from === "search" ? "search" : "tasks"}
           </Link>
           <h2 className="text-2xl font-semibold text-pp-navy mt-1">{caseData.address}</h2>
           <p className="text-sm text-slate-600 mt-1">
@@ -121,13 +156,39 @@ export default function CasePage() {
         </p>
       )}
 
-      <div role="tablist" aria-label="Case sections" className="flex flex-wrap gap-1 border-b border-pp-border">
+      {nextTask && (
+        <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-950" role="status">
+          Decision saved.{" "}
+          <button
+            type="button"
+            className="font-medium underline"
+            onClick={() => navigate(`/cases/${nextTask.case_id}?tab=distribution&from=tasks`)}
+          >
+            Open next task: {nextTask.title}
+          </button>
+        </div>
+      )}
+
+      {failed.length > 0 && canDecide && (
+        <p className="text-sm text-red-900 bg-red-50 border border-red-200 rounded-md p-3" role="status">
+          {failed.length} department review{failed.length === 1 ? "" : "s"} failed. Request changes, or approve only with
+          a recorded override.
+        </p>
+      )}
+
+      <div
+        role="tablist"
+        aria-label="Case sections"
+        className="flex flex-wrap gap-1 border-b border-pp-border"
+        onKeyDown={onTabKey}
+      >
         {TABS.map((name) => (
           <button
             key={name}
             id={`${tabsId}-${name}`}
             role="tab"
             type="button"
+            tabIndex={tab === name ? 0 : -1}
             aria-selected={tab === name}
             aria-controls={`${tabsId}-panel-${name}`}
             onClick={() => setTab(name)}
@@ -147,7 +208,7 @@ export default function CasePage() {
           aria-labelledby={`${tabsId}-summary`}
           className="grid md:grid-cols-2 gap-4"
         >
-          <div className="bg-white border border-pp-border rounded-lg p-4 shadow-sm">
+          <div className="bg-white border border-pp-border rounded-lg p-4">
             <h3 className="font-medium text-pp-navy mb-3">Property</h3>
             <dl className="text-sm space-y-2">
               <div className="flex justify-between gap-4">
@@ -164,20 +225,26 @@ export default function CasePage() {
               </div>
             </dl>
           </div>
-          <div className="bg-white border border-pp-border rounded-lg p-4 shadow-sm">
+          <div className="bg-white border border-pp-border rounded-lg p-4">
             <h3 className="font-medium text-pp-navy mb-3">Case timeline</h3>
             <p className="text-sm text-slate-600">Opened {new Date(caseData.created_at).toLocaleString()}</p>
             <p className="text-sm text-slate-600">Updated {new Date(caseData.updated_at).toLocaleString()}</p>
             <button
               type="button"
               disabled={busy === "briefing"}
-              onClick={generateBriefing}
+              onClick={() =>
+                runAction("briefing", async () => {
+                  const result = await api.orchestrate(caseId);
+                  setBriefing(result.summary);
+                  writeBriefing(caseId, result.summary);
+                })
+              }
               className="mt-4 text-sm px-3 py-1.5 rounded-md bg-pp-accent text-white disabled:opacity-50"
             >
               {busy === "briefing" ? "Generating…" : "Generate clerk briefing"}
             </button>
             {briefing && (
-              <p className="mt-3 text-sm text-slate-700 border-l-4 border-pp-accent pl-3">{briefing}</p>
+              <p className="mt-3 text-sm text-slate-700 border-l-4 border-pp-accent pl-3 whitespace-pre-wrap">{briefing}</p>
             )}
           </div>
         </div>
@@ -187,7 +254,19 @@ export default function CasePage() {
         <div role="tabpanel" id={`${tabsId}-panel-distribution`} aria-labelledby={`${tabsId}-distribution`} className="space-y-3">
           {bundle.workflow.length > 0 && (
             <div className="bg-slate-50 border border-pp-border rounded-lg p-3 text-sm">
-              <p className="font-medium text-pp-navy mb-2">Department workflow</p>
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                <p className="font-medium text-pp-navy">Department workflow</p>
+                {stalled && (
+                  <button
+                    type="button"
+                    disabled={busy === "resume"}
+                    onClick={() => runAction("resume", async () => { await api.resumeWorkflow(caseId); })}
+                    className="text-sm px-3 py-1 rounded-md bg-pp-navy text-white disabled:opacity-50"
+                  >
+                    {busy === "resume" ? "Resuming…" : "Resume workflow"}
+                  </button>
+                )}
+              </div>
               <div className="flex flex-wrap gap-2">
                 {bundle.workflow.map((step) => (
                   <span
@@ -204,7 +283,7 @@ export default function CasePage() {
             <button
               type="button"
               disabled={busy === "refresh"}
-              onClick={refreshDistribution}
+              onClick={() => runAction("refresh", async () => { await api.refreshDistribution(caseId); })}
               className="text-sm px-3 py-1.5 rounded-md bg-pp-accent text-white disabled:opacity-50"
             >
               {busy === "refresh" ? "Refreshing…" : "Refresh from NYC Open Data"}
@@ -213,20 +292,21 @@ export default function CasePage() {
           {bundle.distribution.length === 0 ? (
             <EmptyState
               title="No department reviews yet"
-              description="Distribution results will appear after intake completes or after you refresh from NYC Open Data."
+              description="Distribution results appear after intake or after you refresh from NYC Open Data."
             />
           ) : (
-            <div className="overflow-x-auto rounded-lg border border-pp-border bg-white shadow-sm">
+            <div className="table-scroll rounded-lg border border-pp-border bg-white" tabIndex={0}>
               <table className="min-w-full text-sm">
+                <caption className="sr-only">Department distribution reviews. Activate a row for findings.</caption>
                 <thead className="bg-slate-50 text-slate-600 text-left">
                   <tr>
-                    <th scope="col" className="px-4 py-3">
+                    <th scope="col" className="px-4 py-2">
                       Department
                     </th>
-                    <th scope="col" className="px-4 py-3">
+                    <th scope="col" className="px-4 py-2">
                       Status
                     </th>
-                    <th scope="col" className="px-4 py-3">
+                    <th scope="col" className="px-4 py-2">
                       Summary
                     </th>
                   </tr>
@@ -237,6 +317,13 @@ export default function CasePage() {
                       key={row.department}
                       className="border-t border-pp-border hover:bg-slate-50 cursor-pointer"
                       onClick={() => setSelected(row)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          setSelected(row);
+                        }
+                      }}
+                      tabIndex={0}
                     >
                       <td className="px-4 py-3 capitalize font-medium">
                         {row.department}
@@ -260,14 +347,15 @@ export default function CasePage() {
           {!bundle?.document ? (
             <EmptyState
               title="No intake document on file"
-              description="Documents from new intake are stored after PII redaction."
+              description="Plan PDFs are not in this cut. Intake packets are stored as redacted text after PII removal."
             />
           ) : (
-            <div className="bg-white border border-pp-border rounded-lg p-4 shadow-sm space-y-4">
+            <div className="bg-white border border-pp-border rounded-lg p-4 space-y-4">
               <div>
-                <h3 className="font-medium text-pp-navy">Redacted applicant packet</h3>
+                <h3 className="font-medium text-pp-navy">Intake packet (redacted)</h3>
                 <p className="text-xs text-slate-500 mt-1">
-                  Stored {new Date(bundle.document.stored_at).toLocaleString()}
+                  Text · {bundle.document.redacted_text.length.toLocaleString()} characters · stored{" "}
+                  {new Date(bundle.document.stored_at).toLocaleString()}
                 </p>
               </div>
               {bundle.document.pii_findings.length > 0 && (
@@ -286,6 +374,9 @@ export default function CasePage() {
 
       {tab === "claims" && bundle && (
         <div role="tabpanel" id={`${tabsId}-panel-claims`} aria-labelledby={`${tabsId}-claims`} className="space-y-4">
+          <p className="text-sm text-slate-600">
+            Claims are recorded on the case. They do not email the applicant or open a DOB NOW thread in this version.
+          </p>
           {canDecide && (
             <div className="flex flex-col sm:flex-row gap-2">
               <label htmlFor="claim-message" className="sr-only">
@@ -301,10 +392,16 @@ export default function CasePage() {
               <button
                 type="button"
                 disabled={busy === "claim"}
-                onClick={submitClaim}
+                onClick={() =>
+                  runAction("claim", async () => {
+                    if (!claimText.trim()) throw new Error("Enter a document request for the applicant");
+                    await api.createClaim(caseId, claimText.trim());
+                    setClaimText("");
+                  })
+                }
                 className="px-4 py-2 rounded-md bg-pp-accent text-white text-sm disabled:opacity-50"
               >
-                {busy === "claim" ? "Sending…" : "Send claim"}
+                {busy === "claim" ? "Saving…" : "Record claim"}
               </button>
             </div>
           )}
@@ -321,7 +418,7 @@ export default function CasePage() {
                   <p>{claim.message}</p>
                   {claim.response_message && (
                     <div className="rounded-md bg-slate-50 border border-pp-border p-3">
-                      <p className="text-xs font-medium text-slate-500">Applicant response</p>
+                      <p className="text-xs font-medium text-slate-500">Applicant response (recorded by clerk)</p>
                       <p className="mt-1">{claim.response_message}</p>
                       {claim.responded_at && (
                         <p className="text-xs text-slate-500 mt-2">{new Date(claim.responded_at).toLocaleString()}</p>
@@ -345,7 +442,14 @@ export default function CasePage() {
                             <button
                               type="button"
                               disabled={busy === `respond-${claim.id}`}
-                              onClick={() => submitResponse(claim.id)}
+                              onClick={() =>
+                                runAction(`respond-${claim.id}`, async () => {
+                                  if (!responseText.trim()) throw new Error("Enter the applicant response received");
+                                  await api.respondToClaim(caseId, claim.id, responseText.trim());
+                                  setResponseText("");
+                                  setRespondingClaimId(null);
+                                })
+                              }
                               className="px-3 py-1.5 rounded-md bg-pp-accent text-white text-sm disabled:opacity-50"
                             >
                               {busy === `respond-${claim.id}` ? "Saving…" : "Save response"}
@@ -382,13 +486,13 @@ export default function CasePage() {
 
       {tab === "audit" && bundle && (
         <div role="tabpanel" id={`${tabsId}-panel-audit`} aria-labelledby={`${tabsId}-audit`} className="space-y-6">
-          <div className="bg-white border border-pp-border rounded-lg p-4 shadow-sm">
+          <div className="bg-white border border-pp-border rounded-lg p-4">
             <h3 className="font-medium text-pp-navy mb-3">Trace replay</h3>
             <TraceReplay
               spans={bundle.trace}
-              cloudTraceUrl={bundle.observability.cloud_trace_url}
-              langfuseUrl={bundle.observability.langfuse_url}
-              gcpWorkflowsUrl={bundle.observability.gcp_workflows_url}
+              cloudTraceUrl={admin ? bundle.observability.cloud_trace_url : null}
+              langfuseUrl={admin ? bundle.observability.langfuse_url : null}
+              gcpWorkflowsUrl={admin ? bundle.observability.gcp_workflows_url : null}
             />
           </div>
           <div>
@@ -412,85 +516,87 @@ export default function CasePage() {
         </div>
       )}
 
-      {selected && (
-        <div className="fixed inset-0 bg-black/30 flex justify-end z-20" role="presentation" onClick={() => setSelected(null)}>
-          <aside
-            role="dialog"
-            aria-modal="true"
-            aria-label={`${selected.department} review details`}
-            className="w-full max-w-md bg-white h-full shadow-xl p-6 overflow-y-auto"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <button type="button" onClick={() => setSelected(null)} className="text-sm text-pp-accent mb-4">
-              Close
-            </button>
-            <h3 className="text-lg font-semibold capitalize text-pp-navy">{selected.department}</h3>
-            <div className="mt-2">
-              <StatusBadge status={selected.status} />
+      <ModalDialog
+        open={Boolean(selected)}
+        title={selected ? `${selected.department} review` : "Review"}
+        onClose={() => setSelected(null)}
+        variant="drawer"
+      >
+        {selected && (
+          <div className="space-y-4">
+            <StatusBadge status={selected.status} />
+            <p className="text-sm text-slate-700">{selected.summary}</p>
+            <div>
+              <h4 className="text-sm font-medium">Findings</h4>
+              <ul className="mt-2 text-sm list-disc pl-5 space-y-1">
+                {selected.findings.map((finding) => (
+                  <li key={finding}>{finding}</li>
+                ))}
+              </ul>
             </div>
-            <p className="mt-4 text-sm text-slate-700">{selected.summary}</p>
-            <h4 className="mt-6 text-sm font-medium">Findings</h4>
-            <ul className="mt-2 text-sm list-disc pl-5 space-y-1">
-              {selected.findings.map((finding) => (
-                <li key={finding}>{finding}</li>
-              ))}
-            </ul>
-            <h4 className="mt-6 text-sm font-medium">Evidence (NYC Open Data)</h4>
-            <ul className="mt-2 text-sm space-y-2">
-              {selected.evidence.map((ev) => (
-                <li key={`${ev.dataset_id}-${ev.label}`} className="border border-pp-border rounded p-2">
-                  <span className="text-slate-500">{ev.dataset_id}</span> · {ev.label}: <strong>{String(ev.value)}</strong>
-                </li>
-              ))}
-            </ul>
+            <div>
+              <h4 className="text-sm font-medium">Evidence (NYC Open Data)</h4>
+              <ul className="mt-2 text-sm space-y-2">
+                {selected.evidence.map((ev) => (
+                  <li key={`${ev.dataset_id}-${ev.label}`} className="border border-pp-border rounded p-2">
+                    <span className="text-slate-500">{ev.dataset_id}</span> · {ev.label}:{" "}
+                    <strong>{String(ev.value)}</strong>
+                  </li>
+                ))}
+              </ul>
+            </div>
             {selected.citations.length > 0 && (
-              <>
-                <h4 className="mt-6 text-sm font-medium">Citations</h4>
+              <div>
+                <h4 className="text-sm font-medium">Citations</h4>
                 {selected.citations.map((citation) => (
-                  <blockquote
-                    key={citation.code}
-                    className="mt-2 text-sm border-l-4 border-pp-accent pl-3 text-slate-700"
-                  >
+                  <blockquote key={citation.code} className="mt-2 text-sm border-l-4 border-pp-accent pl-3 text-slate-700">
                     <p className="font-medium">{citation.code}</p>
                     <p>{citation.excerpt}</p>
                   </blockquote>
                 ))}
-              </>
+              </div>
             )}
-          </aside>
-        </div>
-      )}
+          </div>
+        )}
+      </ModalDialog>
 
       {canDecide && (
-        <footer className="fixed bottom-0 left-0 right-0 bg-white border-t border-pp-border shadow-lg">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-            <label htmlFor="clerk-note" className="sr-only">
-              Clerk note
-            </label>
-            <input
-              id="clerk-note"
-              className="flex-1 border border-pp-border rounded-md px-3 py-2 text-sm"
-              placeholder="Clerk note (required for audit)…"
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-            />
-            <div className="flex gap-2">
-              <button
-                type="button"
-                disabled={busy === "decide"}
-                onClick={() => setApproveOpen(true)}
-                className="flex-1 sm:flex-none px-4 py-2 rounded-md bg-emerald-600 text-white text-sm font-medium disabled:opacity-50"
-              >
-                Approve dossier
-              </button>
-              <button
-                type="button"
-                disabled={busy === "decide"}
-                onClick={() => decide("request_changes")}
-                className="flex-1 sm:flex-none px-4 py-2 rounded-md border border-pp-border text-sm font-medium disabled:opacity-50"
-              >
-                {busy === "decide" ? "Saving…" : "Request changes"}
-              </button>
+        <footer className="fixed bottom-0 left-0 right-0 z-10 bg-white border-t border-pp-border">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex flex-col gap-3">
+            {failed.length > 0 && (
+              <p className="text-xs text-red-800">Failed reviews: {failed.map((row) => row.department).join(", ")}</p>
+            )}
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+            <div className="flex flex-col gap-2 sm:flex-1">
+              <label htmlFor="clerk-note" className="text-sm font-medium text-slate-700">
+                Clerk note (required)
+              </label>
+              <input
+                id="clerk-note"
+                className="w-full border border-pp-border rounded-md px-3 py-2 text-sm"
+                placeholder="Clerk note — required for the audit trail"
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+              />
+            </div>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  disabled={busy === "decide"}
+                  onClick={() => requireNote() && setApproveOpen(true)}
+                  className="flex-1 sm:flex-none px-4 py-2 rounded-md bg-emerald-700 text-white text-sm font-medium disabled:opacity-50"
+                >
+                  Approve dossier
+                </button>
+                <button
+                  type="button"
+                  disabled={busy === "decide"}
+                  onClick={() => requireNote() && setChangesOpen(true)}
+                  className="flex-1 sm:flex-none px-4 py-2 rounded-md border border-pp-border text-sm font-medium disabled:opacity-50"
+                >
+                  Request changes
+                </button>
+              </div>
             </div>
           </div>
         </footer>
@@ -498,12 +604,27 @@ export default function CasePage() {
 
       <ConfirmDialog
         open={approveOpen}
-        title="Approve this dossier?"
-        description={`You are approving ${caseData.address}. This closes open tasks and records your decision in the audit log.`}
-        confirmLabel="Approve dossier"
+        title={failed.length ? "Approve with failed reviews?" : "Approve this dossier?"}
+        description={
+          failed.length
+            ? `Reviews failed for ${failed.map((row) => row.department).join(", ")}. Approving records an override. This closes open tasks.`
+            : `You are approving ${caseData.address}. This closes open tasks and writes the audit log.`
+        }
+        confirmLabel={failed.length ? "Approve with override" : "Approve dossier"}
         busy={busy === "decide"}
+        danger={failed.length > 0}
         onCancel={() => setApproveOpen(false)}
-        onConfirm={() => decide("approve")}
+        onConfirm={() => decide("approve", failed.length > 0)}
+      />
+      <ConfirmDialog
+        open={changesOpen}
+        title="Request changes?"
+        description="This records a changes-requested decision, closes open tasks, and writes your note to the audit log. It does not notify the applicant automatically."
+        confirmLabel="Request changes"
+        busy={busy === "decide"}
+        danger
+        onCancel={() => setChangesOpen(false)}
+        onConfirm={() => decide("request_changes")}
       />
     </div>
   );

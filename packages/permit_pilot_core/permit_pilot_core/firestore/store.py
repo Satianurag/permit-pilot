@@ -274,7 +274,7 @@ class FirestoreStore:
         return self._db.collection("clerks")
 
     def list_clerks(self) -> list[dict[str, Any]]:
-        return [snap.to_dict() or {} | {"username": snap.id} for snap in self._clerks().stream()]
+        return [(snap.to_dict() or {}) | {"username": snap.id} for snap in self._clerks().stream()]
 
     def upsert_clerk(
         self,

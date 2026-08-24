@@ -9,7 +9,80 @@
   --color-pp-surface: #f4f6f9;
 }
 
+html {
+  scroll-padding-bottom: 9rem;
+}
+
 body {
   @apply bg-pp-surface text-slate-900 antialiased;
   font-family: var(--font-sans);
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-pp-accent);
+  outline-offset: 2px;
+  scroll-margin-bottom: 9rem;
+}
+
+.skip-link {
+  position: absolute;
+  left: 0.75rem;
+  top: -3rem;
+  z-index: 80;
+  border-radius: 0.25rem;
+  background: #fff;
+  padding: 0.5rem 0.75rem;
+  color: var(--color-pp-navy);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.skip-link:focus {
+  top: 0.75rem;
+}
+
+.table-scroll {
+  overflow-x: auto;
+}
+
+.pp-dialog {
+  width: min(32rem, calc(100% - 2rem));
+  border: 1px solid var(--color-pp-border);
+  border-radius: 0.5rem;
+  padding: 1.5rem;
+  background: #fff;
+  color: inherit;
+}
+
+.pp-dialog::backdrop {
+  background: rgb(15 23 42 / 0.45);
+}
+
+.pp-dialog-drawer {
+  width: min(28rem, 100%);
+  height: 100%;
+  max-height: 100%;
+  margin: 0 0 0 auto;
+  border-radius: 0;
+  overflow-y: auto;
+}
+
+.skeleton-pulse {
+  animation: skeleton-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes skeleton-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  .skeleton-pulse {
+    animation: none;
+  }
 }

@@ -20,6 +20,7 @@ export async function parseApiError(response: Response): Promise<string> {
 }
 
 export function errorMessage(error: unknown): string {
+  if (typeof error === "string" && error.trim()) return error;
   if (error instanceof Error) return error.message;
   return "Something went wrong";
 }

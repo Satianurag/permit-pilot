@@ -14,4 +14,6 @@ def list_tasks(
     status: Annotated[str | None, Query(description="Filter by task status")] = "open",
 ):
     store = store_from_request(request)
+    if status == "all":
+        status = None
     return store.list_tasks(status=status)

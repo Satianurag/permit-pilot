@@ -137,3 +137,4 @@ class CaseBundle(BaseModel):
 class CaseDecision(BaseModel):
     decision: str
     note: str
+    override: bool = False

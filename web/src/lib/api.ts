@@ -176,7 +176,7 @@ export const api = {
     return res.json() as Promise<{ access_token: string; token_type: string }>;
   },
   me: () => get<ClerkProfile>("/auth/me"),
-  listTasks: () => get<Task[]>("/tasks"),
+  listTasks: (status = "open") => get<Task[]>(`/tasks?status=${encodeURIComponent(status)}`),
   listCases: (q?: string) => get<Case[]>(`/cases${q ? `?q=${encodeURIComponent(q)}` : ""}`),
   getCaseBundle: (id: string) => get<CaseBundle>(`/cases/${id}/bundle`),
   refreshDistribution: (id: string) => post<DepartmentReview[]>(`/cases/${id}/distribution/refresh`),
@@ -184,8 +184,9 @@ export const api = {
   createClaim: (id: string, message: string) => post<Claim>(`/cases/${id}/claims`, { message }),
   respondToClaim: (caseId: string, claimId: string, message: string) =>
     post<Claim>(`/cases/${caseId}/claims/${claimId}/respond`, { message }),
-  decide: (id: string, decision: string, note: string) =>
-    post<Case>(`/cases/${id}/decision`, { decision, note }),
+  decide: (id: string, decision: string, note: string, override = false) =>
+    post<Case>(`/cases/${id}/decision`, { decision, note, override }),
   orchestrate: (id: string) => post<{ summary: string; model: string }>(`/cases/${id}/orchestrate`),
+  resumeWorkflow: (id: string) => post<{ step: unknown; steps: WorkflowStep[] }>(`/cases/${id}/workflow/resume`),
   listAgents: () => get<AgentCard[]>("/agents"),
 };

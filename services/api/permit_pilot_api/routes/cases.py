@@ -3,6 +3,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
+from permit_pilot_core.decisions import approval_block_message, failed_review_departments
 from permit_pilot_core.distribution.engine import DistributionEngine
 from permit_pilot_core.firestore.store import FirestoreStore
 from permit_pilot_core.models import (
@@ -212,6 +213,10 @@ def post_decision(
     if not body.note.strip():
         raise HTTPException(status_code=400, detail="Clerk note is required for audit")
     if body.decision == "approve":
+        failed = failed_review_departments(store.list_distribution(case_id))
+        blocked = approval_block_message(failed, body.override)
+        if blocked:
+            raise HTTPException(status_code=409, detail=blocked)
         store.set_case_status(case_id, CaseStatus.APPROVED)
     else:
         store.set_case_status(case_id, CaseStatus.CHANGES_REQUESTED)

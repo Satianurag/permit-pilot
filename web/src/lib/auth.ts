@@ -42,3 +42,4 @@ export function isAuthenticated(): boolean {
 export function isAdmin(user: ClerkProfile | null): boolean {
   return user?.role === "admin";
 }
+

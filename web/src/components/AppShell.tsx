@@ -17,11 +17,14 @@ export default function AppShell({ onOpenAgents }: Props) {
 
   return (
     <div className="min-h-screen flex flex-col">
+      <a href="#main-content" className="skip-link">
+        Skip to main content
+      </a>
       <header className="bg-pp-navy text-white border-b border-pp-slate">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <p className="text-xs uppercase tracking-widest text-blue-200">NYC Department of Buildings</p>
-            <h1 className="text-xl font-semibold">Permit Pilot</h1>
+            <p className="text-lg font-semibold leading-tight">Permit Pilot</p>
           </div>
           <div className="flex flex-wrap items-center gap-2 text-sm">
             <nav className="flex flex-wrap gap-1" aria-label="Primary">
@@ -56,7 +59,7 @@ export default function AppShell({ onOpenAgents }: Props) {
           </div>
         </div>
       </header>
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-6">
+      <main id="main-content" tabIndex={-1} className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-6">
         <Outlet />
       </main>
     </div>
