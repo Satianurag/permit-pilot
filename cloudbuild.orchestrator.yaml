@@ -1,0 +1,11 @@
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - Dockerfile.orchestrator
+      - -t
+      - us-central1-docker.pkg.dev/gen-lang-client-0233250350/permit-pilot/orchestrator:latest
+      - .
+images:
+  - us-central1-docker.pkg.dev/gen-lang-client-0233250350/permit-pilot/orchestrator:latest

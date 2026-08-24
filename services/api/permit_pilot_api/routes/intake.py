@@ -1,0 +1,72 @@
+from fastapi import APIRouter, Depends, HTTPException, Request
+
+from permit_pilot_core.agents.registry import list_agent_cards
+from permit_pilot_core.distribution.engine import DistributionEngine
+from permit_pilot_core.firestore.store import FirestoreStore
+from permit_pilot_core.models import CreateCaseRequest, IntakeRequest
+from permit_pilot_core.security.agent_gateway import verify_agent_signature
+from permit_pilot_core.security.pii import redact_pii
+from permit_pilot_core.socrata.client import SocrataClient
+from permit_pilot_core.workflow.runner import WorkflowRunner
+from permit_pilot_api.deps import engine_from_request, store_from_request
+
+router = APIRouter(prefix="/cases", tags=["intake"])
+
+
+async def _resolve_bin(payload: CreateCaseRequest, socrata: SocrataClient) -> CreateCaseRequest:
+    if payload.bin:
+        return payload
+    rows = await socrata.pluto_by_bbl(payload.bbl)
+    if not rows:
+        return payload
+    row = rows[0]
+    return payload.model_copy(
+        update={
+            "bin": str(row.get("bin") or ""),
+            "address": payload.address or str(row.get("address") or ""),
+            "borough": payload.borough or str(row.get("borough") or ""),
+            "owner": payload.owner or str(row.get("ownername") or ""),
+        }
+    )
+
+
+@router.post("/intake")
+async def intake_case(payload: IntakeRequest, request: Request):
+    store: FirestoreStore = store_from_request(request)
+    engine: DistributionEngine = engine_from_request(request)
+    socrata = SocrataClient()
+
+    redacted_packet = ""
+    pii_findings: list[str] = []
+    if payload.packet_text.strip():
+        redacted_packet, pii_findings = redact_pii(payload.packet_text)
+
+    create_payload = CreateCaseRequest(
+        address=payload.address,
+        bbl=payload.bbl,
+        bin=payload.bin,
+        work_type=payload.work_type,
+        owner=payload.owner,
+        borough=payload.borough,
+    )
+    resolved = await _resolve_bin(create_payload, socrata)
+    case = store.create_case(resolved)
+
+    if redacted_packet:
+        store.save_intake_packet(case.id, redacted_packet, pii_findings)
+        store.append_audit(
+            case.id,
+            actor="system",
+            action="pii_redacted",
+            detail=f"Intake packet redacted: {', '.join(pii_findings) or 'no PII detected'}",
+        )
+
+    runner = WorkflowRunner(store, engine)
+    await runner.run_all(case.id, bbl=case.bbl, bin_=case.bin, work_type=case.work_type)
+    store.create_task(
+        case.id,
+        title=f"Review distribution — BIN {case.bin or case.bbl}",
+        task_type="distribution_review",
+    )
+    store.append_audit(case.id, actor="clerk", action="case_intake", detail=f"Intake for {case.address}")
+    return case

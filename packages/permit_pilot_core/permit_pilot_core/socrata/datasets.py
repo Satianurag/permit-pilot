@@ -1,0 +1,10 @@
+NYC_OPEN_DATA_BASE = "https://data.cityofnewyork.us/resource"
+
+PLUTO = "64uk-42ks"
+PERMITS = "rbx6-tga4"
+FILINGS = "w9ak-ipjd"
+DOB_VIOLATIONS = "3h2n-5cm9"
+DEP_ECB = "skr7-cxt3"
+LANDMARKS = "gpmc-yuvp"
+FDNY_VIOLATIONS = "bi53-yph3"
+HPD_VIOLATIONS = "wvxf-dwi5"

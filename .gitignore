@@ -1,8 +1,12 @@
 .env
 .env.*
 *.keys.env
+cursor_chat*.json
+**/.config/gcloud/
 __pycache__/
 *.pyc
 .venv/
 node_modules/
+dist/
+*.tsbuildinfo
 .DS_Store
