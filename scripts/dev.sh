@@ -4,6 +4,13 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 export GOOGLE_CLOUD_PROJECT="${GOOGLE_CLOUD_PROJECT:-gen-lang-client-0233250350}"
 export GOOGLE_CLOUD_LOCATION="${GOOGLE_CLOUD_LOCATION:-us-central1}"
 
+if [ -f "$ROOT/.env" ]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$ROOT/.env"
+  set +a
+fi
+
 gcloud config set project "$GOOGLE_CLOUD_PROJECT" >/dev/null 2>&1 || true
 
 case "${1:-}" in

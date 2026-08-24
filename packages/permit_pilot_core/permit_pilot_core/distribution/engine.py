@@ -11,6 +11,19 @@ from permit_pilot_core.models import (
 )
 from permit_pilot_core.socrata.client import SocrataClient
 
+BOROUGH_NAMES = {
+    "MN": "MANHATTAN",
+    "BX": "BRONX",
+    "BK": "BROOKLYN",
+    "QN": "QUEENS",
+    "SI": "STATEN ISLAND",
+}
+
+
+def _house_number(address: str) -> str:
+    token = address.strip().split(" ", 1)[0]
+    return token.replace("'", "''")
+
 
 def _now() -> datetime:
     return datetime.now(UTC)
@@ -25,7 +38,7 @@ class DistributionEngine:
             await self.review_zoning(bbl=bbl),
             await self.review_building(bbl=bbl, bin_=bin_),
             await self.review_fire(bin_=bin_),
-            await self.review_utilities(bin_=bin_),
+            await self.review_utilities(bbl=bbl, bin_=bin_),
             await self.review_landmarks(bbl=bbl, work_type=work_type),
         ]
 
@@ -138,28 +151,55 @@ class DistributionEngine:
             updated_at=_now(),
         )
 
-    async def review_utilities(self, *, bin_: str) -> DepartmentReview:
-        if not bin_:
+    async def review_utilities(self, *, bbl: str, bin_: str) -> DepartmentReview:
+        pluto_rows = await self._socrata.pluto_by_bbl(bbl)
+        if not pluto_rows:
             return DepartmentReview(
                 department=Department.UTILITIES,
                 status=ReviewStatus.NEEDS_INFO,
-                summary="BIN required for HPD utility-adjacent violation lookup.",
+                summary="No PLUTO record found for DEP ECB lookup.",
                 updated_at=_now(),
             )
-        hpd = await self._socrata.hpd_violations_by_bin(bin_)
-        status = ReviewStatus.PASS if len(hpd) < 10 else ReviewStatus.FAIL
+        lot = pluto_rows[0]
+        address = str(lot.get("address") or "")
+        borough_code = str(lot.get("borough") or "")
+        borough_name = BOROUGH_NAMES.get(borough_code.upper(), borough_code.upper())
+        house = _house_number(address)
+        if not house or not borough_name:
+            return DepartmentReview(
+                department=Department.UTILITIES,
+                status=ReviewStatus.NEEDS_INFO,
+                summary="Address and borough required for DEP ECB violation lookup.",
+                updated_at=_now(),
+            )
+        rows = await self._socrata.dep_ecb_by_address(house=house, borough=borough_name)
+        open_rows = [
+            row
+            for row in rows
+            if str(row.get("compliance_status", "")).lower() not in {"dismissed", "paid in full"}
+        ]
+        status = ReviewStatus.PASS if len(open_rows) == 0 else ReviewStatus.FAIL
         return DepartmentReview(
             department=Department.UTILITIES,
             status=status,
-            summary=f"{len(hpd)} HPD violation records associated with BIN.",
-            findings=[f"HPD violations on BIN: {len(hpd)}"],
+            summary=f"{len(open_rows)} open DEP ECB violation records at {address}.",
+            findings=[
+                f"DEP ECB records for {address}, {borough_name}: {len(rows)} total",
+                f"Open or penalty-due records: {len(open_rows)}",
+            ],
             evidence=[
                 EvidenceItem(
                     source="NYC Open Data",
-                    dataset_id="wvxf-dwi5",
-                    label="hpd_violation_count",
-                    value=len(hpd),
-                )
+                    dataset_id="skr7-cxt3",
+                    label="dep_ecb_record_count",
+                    value=len(rows),
+                ),
+                EvidenceItem(
+                    source="NYC Open Data",
+                    dataset_id="skr7-cxt3",
+                    label="open_dep_ecb_count",
+                    value=len(open_rows),
+                ),
             ],
             updated_at=_now(),
         )

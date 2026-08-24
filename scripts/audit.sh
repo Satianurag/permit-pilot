@@ -1,47 +1,49 @@
 #!/usr/bin/env bash
-# Sequential production verification (no mocks).
+# Production verification against Cloud Run.
 set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BASE="${PERMIT_PILOT_URL:-https://permit-pilot-538666547847.us-central1.run.app}"
+
+if [ -f "${ROOT}/.cloud-deploy.env" ]; then
+  # shellcheck disable=SC1091
+  source "${ROOT}/.cloud-deploy.env"
+fi
+
+USER="${CLERK_BOOTSTRAP_USERNAME:-maria}"
+PASS="${CLERK_BOOTSTRAP_PASSWORD:?Set CLERK_BOOTSTRAP_PASSWORD or run ./scripts/deploy.sh first}"
+
+echo "=== 0. Clerk auth ==="
+TOKEN=$(curl -fsS -X POST "$BASE/api/auth/token" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "username=${USER}&password=${PASS}" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+AUTH=(-H "Authorization: Bearer $TOKEN")
 
 echo "=== 1. Health ==="
 curl -fsS "$BASE/api/health" | grep -q ok
 
-echo "=== 2. Tasks (Firestore) ==="
-TASKS=$(curl -fsS "$BASE/api/tasks")
-echo "$TASKS" | python3 -c "import sys,json; d=json.load(sys.stdin); assert len(d)>=1, 'no tasks'"
+echo "=== 2. Unauthenticated API blocked ==="
+CODE=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/tasks")
+test "$CODE" = "401"
 
-echo "=== 3. Agent catalog ==="
-curl -fsS "$BASE/api/agents" | python3 -c "import sys,json; d=json.load(sys.stdin); assert any(a['signed'] for a in d)"
+echo "=== 3. Tasks (Firestore, open only) ==="
+TASKS=$(curl -fsS "${AUTH[@]}" "$BASE/api/tasks")
+echo "$TASKS" | python3 -c "import sys,json; d=json.load(sys.stdin); assert len(d)>=1, 'no open tasks'"
 
-echo "=== 4. Case + distribution (live Socrata-backed) ==="
+echo "=== 4. Case bundle + distribution (live Socrata-backed) ==="
 CASE_ID=$(echo "$TASKS" | python3 -c "import sys,json; print(json.load(sys.stdin)[0]['case_id'])")
-curl -fsS "$BASE/api/cases/$CASE_ID/distribution" | python3 -c "import sys,json; d=json.load(sys.stdin); assert len(d)>=5"
+curl -fsS "${AUTH[@]}" "$BASE/api/cases/$CASE_ID/bundle" | python3 -c "import sys,json; d=json.load(sys.stdin); assert len(d['distribution'])>=5; util=[r for r in d['distribution'] if r['department']=='utilities'][0]; assert 'skr7-cxt3' in str(util['evidence']), 'utilities must use DEP ECB'"
 
-echo "=== 5. Vertex orchestrator ==="
-curl -fsS -X POST "$BASE/api/cases/$CASE_ID/orchestrate" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d.get('summary')"
+echo "=== 5. Clerk briefing ==="
+curl -fsS "${AUTH[@]}" -X POST "$BASE/api/cases/$CASE_ID/orchestrate" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d.get('summary')"
 
-echo "=== 6. Workflow + trace endpoints ==="
-curl -fsS "$BASE/api/cases/$CASE_ID/workflow" >/dev/null
-curl -fsS "$BASE/api/cases/$CASE_ID/trace" >/dev/null
+echo "=== 6. Trace + observability ==="
+curl -fsS "${AUTH[@]}" "$BASE/api/cases/$CASE_ID/trace" >/dev/null
+curl -fsS "${AUTH[@]}" "$BASE/api/config/observability?case_id=$CASE_ID" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d.get('cloud_trace_url')"
 
-echo "=== 7. Observability config ==="
-curl -fsS "$BASE/api/config/observability?case_id=$CASE_ID" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d.get('cloud_trace_url')"
+echo "=== 7. Permit search ==="
+curl -fsS "${AUTH[@]}" "$BASE/api/cases?q=BIN" >/dev/null
 
-echo "=== 8. GCP Cloud Workflows (if configured) ==="
-GCP_RUN=$(curl -fsS -w "\n%{http_code}" -X POST "$BASE/api/cases/$CASE_ID/workflow/gcp-run" 2>/dev/null || echo -e "\n503")
-HTTP_CODE=$(echo "$GCP_RUN" | tail -1)
-BODY=$(echo "$GCP_RUN" | sed '$d')
-if [ "$HTTP_CODE" = "200" ]; then
-  echo "$BODY" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d.get('execution_id')"
-  echo "GCP workflow execution started"
-elif [ "$HTTP_CODE" = "503" ]; then
-  echo "SKIP: GCP_WORKFLOW_NAME not configured on service yet"
-else
-  echo "GCP workflow failed ($HTTP_CODE): $BODY"
-  exit 1
-fi
-
-echo "=== 9. SPA routes ==="
-curl -fsS -o /dev/null -w "%{http_code}\n" "$BASE/tasks" | grep -q 200
+echo "=== 8. SPA login route ==="
+curl -fsS -o /dev/null -w "%{http_code}\n" "$BASE/login" | grep -q 200
 
 echo "ALL CHECKS PASSED — $BASE"

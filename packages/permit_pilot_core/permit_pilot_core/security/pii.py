@@ -60,14 +60,12 @@ def _redact_dlp(text: str, project_id: str) -> tuple[str, list[str]]:
 
 
 def redact_pii(text: str) -> tuple[str, list[str]]:
-    """Redact PII using Google Cloud DLP when on GCP; regex fallback for local dev."""
+    """Redact PII using Google Cloud DLP on Cloud Run."""
     if not text.strip():
         return text, []
     project = os.environ.get("GOOGLE_CLOUD_PROJECT")
-    use_dlp = os.environ.get("USE_CLOUD_DLP", "true").lower() in {"1", "true", "yes"}
-    if project and use_dlp and os.environ.get("K_SERVICE"):
-        try:
-            return _redact_dlp(text, project)
-        except Exception:
-            pass
-    return _redact_regex(text)
+    if not project:
+        raise RuntimeError("GOOGLE_CLOUD_PROJECT is required for PII redaction")
+    if not os.environ.get("K_SERVICE"):
+        raise RuntimeError("Cloud DLP redaction runs on Cloud Run only")
+    return _redact_dlp(text, project)

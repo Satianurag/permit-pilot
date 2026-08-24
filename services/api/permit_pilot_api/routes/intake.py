@@ -1,16 +1,17 @@
+from typing import Annotated
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from permit_pilot_core.agents.registry import list_agent_cards
 from permit_pilot_core.distribution.engine import DistributionEngine
 from permit_pilot_core.firestore.store import FirestoreStore
 from permit_pilot_core.models import CreateCaseRequest, IntakeRequest
-from permit_pilot_core.security.agent_gateway import verify_agent_signature
 from permit_pilot_core.security.pii import redact_pii
 from permit_pilot_core.socrata.client import SocrataClient
 from permit_pilot_core.workflow.runner import WorkflowRunner
+from permit_pilot_api.auth import ClerkUser, clerk_actor, get_current_user
 from permit_pilot_api.deps import engine_from_request, store_from_request
 
-router = APIRouter(prefix="/cases", tags=["intake"])
+router = APIRouter(prefix="/cases", tags=["intake"], dependencies=[Depends(get_current_user)])
 
 
 async def _resolve_bin(payload: CreateCaseRequest, socrata: SocrataClient) -> CreateCaseRequest:
@@ -31,7 +32,11 @@ async def _resolve_bin(payload: CreateCaseRequest, socrata: SocrataClient) -> Cr
 
 
 @router.post("/intake")
-async def intake_case(payload: IntakeRequest, request: Request):
+async def intake_case(
+    payload: IntakeRequest,
+    request: Request,
+    current_user: Annotated[ClerkUser, Depends(get_current_user)],
+):
     store: FirestoreStore = store_from_request(request)
     engine: DistributionEngine = engine_from_request(request)
     socrata = SocrataClient()
@@ -68,5 +73,10 @@ async def intake_case(payload: IntakeRequest, request: Request):
         title=f"Review distribution — BIN {case.bin or case.bbl}",
         task_type="distribution_review",
     )
-    store.append_audit(case.id, actor="clerk", action="case_intake", detail=f"Intake for {case.address}")
+    store.append_audit(
+        case.id,
+        actor=clerk_actor(current_user),
+        action="case_intake",
+        detail=f"Intake for {case.address}",
+    )
     return case

@@ -99,8 +99,19 @@ class Claim(BaseModel):
     case_id: str
     message: str
     status: str
+    response_message: str | None = None
     created_at: datetime
     responded_at: datetime | None = None
+
+
+class ClaimResponseRequest(BaseModel):
+    message: str
+
+
+class IntakeDocument(BaseModel):
+    redacted_text: str
+    pii_findings: list[str]
+    stored_at: datetime
 
 
 class AuditEvent(BaseModel):
@@ -110,6 +121,17 @@ class AuditEvent(BaseModel):
     action: str
     detail: str
     at: datetime
+
+
+class CaseBundle(BaseModel):
+    case: Case
+    distribution: list[DepartmentReview]
+    claims: list[Claim]
+    audit: list[AuditEvent]
+    workflow: list[Any]
+    trace: list[Any]
+    observability: dict[str, str | None]
+    document: IntakeDocument | None = None
 
 
 class CaseDecision(BaseModel):

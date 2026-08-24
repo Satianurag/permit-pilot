@@ -1,5 +1,6 @@
 .env
 .env.*
+.cloud-deploy.env
 *.keys.env
 cursor_chat*.json
 **/.config/gcloud/

@@ -5,15 +5,19 @@ def gcp_project_id() -> str:
     return os.environ.get("GOOGLE_CLOUD_PROJECT", "gen-lang-client-0233250350")
 
 
+def cloud_service_url() -> str:
+    return os.environ.get(
+        "PERMIT_PILOT_URL",
+        "https://permit-pilot-538666547847.us-central1.run.app",
+    ).rstrip("/")
+
+
 def seed_on_startup() -> bool:
     return os.environ.get("SEED_ON_STARTUP", "false").lower() in {"1", "true", "yes"}
 
 
 def cors_origins() -> list[str]:
-    raw = os.environ.get(
-        "CORS_ORIGINS",
-        "http://localhost:5173,http://127.0.0.1:5173",
-    )
+    raw = os.environ.get("CORS_ORIGINS", cloud_service_url())
     return [origin.strip() for origin in raw.split(",") if origin.strip()]
 
 

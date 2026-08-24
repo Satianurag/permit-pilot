@@ -55,3 +55,18 @@ class SocrataClient:
             ds.HPD_VIOLATIONS,
             {"$where": f"bin='{bin_}'", "$limit": str(limit)},
         )
+
+    async def dep_ecb_by_address(
+        self,
+        *,
+        house: str,
+        borough: str,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        borough_upper = borough.upper().replace("'", "''")
+        house_escaped = house.replace("'", "''")
+        where = (
+            f"starts_with(violation_location_house,'{house_escaped}') "
+            f"AND upper(violation_location_borough)='{borough_upper}'"
+        )
+        return await self._get(ds.DEP_ECB, {"$where": where, "$limit": str(limit)})

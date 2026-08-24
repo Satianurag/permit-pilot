@@ -1,14 +1,17 @@
-from fastapi import APIRouter, Header, HTTPException, Request
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
 from permit_pilot_core.agents.registry import list_agent_cards
 from permit_pilot_core.security.agent_gateway import verify_agent_signature
+from permit_pilot_api.auth import ClerkUser, clerk_actor, get_current_admin
 from permit_pilot_api.deps import store_from_request
 
 router = APIRouter(tags=["agents"])
 
 
 @router.get("/agents")
-def get_agents():
+def get_agents(_admin: Annotated[ClerkUser, Depends(get_current_admin)]):
     return list_agent_cards()
 
 
@@ -16,6 +19,7 @@ def get_agents():
 def invoke_agent(
     agent_name: str,
     request: Request,
+    current_user: Annotated[ClerkUser, Depends(get_current_admin)],
     x_agent_signature: str | None = Header(default=None),
     x_case_id: str | None = Header(default=None),
 ):
@@ -25,7 +29,7 @@ def invoke_agent(
             if store.get_case(x_case_id):
                 store.append_audit(
                     x_case_id,
-                    actor="gateway",
+                    actor=clerk_actor(current_user),
                     action="agent_rejected",
                     detail=f"Unsigned or untrusted agent blocked at gateway: {agent_name}",
                 )

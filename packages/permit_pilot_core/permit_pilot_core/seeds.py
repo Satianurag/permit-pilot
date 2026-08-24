@@ -59,21 +59,14 @@ async def ensure_seeded(store: FirestoreStore, engine: DistributionEngine) -> No
                 detail=f"Case created for BBL {case.bbl} with live NYC Open Data keys.",
             )
 
-        if not store.list_distribution(case.id):
-            reviews = await engine.run_all(
-                bbl=case.bbl,
-                bin_=case.bin,
-                work_type=case.work_type,
-            )
-            store.save_distribution(case.id, reviews)
-            store.append_audit(
-                case.id,
-                actor="system",
-                action="distribution_completed",
-                detail="Department reviews loaded from NYC Open Data.",
-            )
+        reviews = await engine.run_all(
+            bbl=case.bbl,
+            bin_=case.bin,
+            work_type=case.work_type,
+        )
+        store.save_distribution(case.id, reviews)
 
-        open_tasks = [t for t in store.list_tasks(case.id) if t.status == "open"]
+        open_tasks = store.list_tasks(case.id, status="open")
         if not open_tasks:
             store.create_task(
                 case.id,

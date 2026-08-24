@@ -117,22 +117,6 @@ class WorkflowRunner:
                 break
         return completed
 
-    def simulate_crash(self, case_id: str) -> WorkflowStep | None:
-        steps = self.get_steps(case_id)
-        for step in steps:
-            if step.status == StepStatus.RUNNING:
-                step.status = StepStatus.INTERRUPTED
-                step.detail = "Worker interrupted — resume to continue from this department."
-                self._store.save_workflow_steps(case_id, steps)
-                self._store.append_audit(
-                    case_id,
-                    actor="system",
-                    action="workflow_interrupted",
-                    detail=f"{step.department.value if step.department else step.name} worker killed",
-                )
-                return step
-        return None
-
     async def _run_department(
         self, dept: Department, *, case_id: str, bbl: str, bin_: str, work_type: str
     ) -> DepartmentReview:
@@ -143,7 +127,7 @@ class WorkflowRunner:
         if dept == Department.FIRE:
             return await self._engine.review_fire(bin_=bin_)
         if dept == Department.UTILITIES:
-            return await self._engine.review_utilities(bin_=bin_)
+            return await self._engine.review_utilities(bbl=bbl, bin_=bin_)
         if dept == Department.LANDMARKS:
             return await self._engine.review_landmarks(bbl=bbl, work_type=work_type)
         if dept == Department.CRITIC:

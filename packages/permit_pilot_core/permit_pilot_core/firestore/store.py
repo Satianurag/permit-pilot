@@ -15,6 +15,7 @@ from permit_pilot_core.models import (
     Claim,
     CreateCaseRequest,
     DepartmentReview,
+    IntakeDocument,
     Task,
 )
 
@@ -76,24 +77,39 @@ class FirestoreStore:
             updated_at=_parse_dt(data["updated_at"]),
         )
 
-    def list_cases(self) -> list[Case]:
+    def list_cases(self, *, query: str | None = None) -> list[Case]:
         cases: list[Case] = []
+        needle = query.strip().lower() if query else None
         for snap in self._cases().stream():
             data = snap.to_dict() or {}
-            cases.append(
-                Case(
-                    id=snap.id,
-                    address=data["address"],
-                    bbl=data["bbl"],
-                    bin=data["bin"],
-                    work_type=data["work_type"],
-                    owner=data["owner"],
-                    borough=data.get("borough"),
-                    status=CaseStatus(data["status"]),
-                    created_at=_parse_dt(data["created_at"]),
-                    updated_at=_parse_dt(data["updated_at"]),
-                )
+            case = Case(
+                id=snap.id,
+                address=data["address"],
+                bbl=data["bbl"],
+                bin=data["bin"],
+                work_type=data["work_type"],
+                owner=data["owner"],
+                borough=data.get("borough"),
+                status=CaseStatus(data["status"]),
+                created_at=_parse_dt(data["created_at"]),
+                updated_at=_parse_dt(data["updated_at"]),
             )
+            if needle:
+                haystack = " ".join(
+                    [
+                        case.address,
+                        case.bbl,
+                        case.bin,
+                        case.work_type,
+                        case.owner,
+                        case.borough or "",
+                        case.status.value,
+                    ]
+                ).lower()
+                if needle not in haystack:
+                    continue
+            cases.append(case)
+        cases.sort(key=lambda c: c.updated_at, reverse=True)
         return cases
 
     def save_distribution(self, case_id: str, reviews: list[DepartmentReview]) -> None:
@@ -125,10 +141,12 @@ class FirestoreStore:
         self._tasks().document(task_id).set(doc)
         return Task(id=task_id, case_id=case_id, title=title, task_type=task_type, status="open", created_at=now)
 
-    def list_tasks(self, case_id: str | None = None) -> list[Task]:
+    def list_tasks(self, case_id: str | None = None, *, status: str | None = "open") -> list[Task]:
         query: Any = self._tasks()
         if case_id:
             query = query.where(filter=firestore.FieldFilter("case_id", "==", case_id))
+        if status:
+            query = query.where(filter=firestore.FieldFilter("status", "==", status))
         tasks: list[Task] = []
         for snap in query.stream():
             data = snap.to_dict() or {}
@@ -144,6 +162,13 @@ class FirestoreStore:
             )
         tasks.sort(key=lambda t: t.created_at, reverse=True)
         return tasks
+
+    def complete_open_tasks_for_case(self, case_id: str) -> int:
+        completed = 0
+        for task in self.list_tasks(case_id, status="open"):
+            self._tasks().document(task.id).update({"status": "completed"})
+            completed += 1
+        return completed
 
     def append_audit(self, case_id: str, actor: str, action: str, detail: str) -> AuditEvent:
         event_id = str(uuid.uuid4())
@@ -182,6 +207,7 @@ class FirestoreStore:
             "case_id": case_id,
             "message": message,
             "status": "open",
+            "response_message": None,
             "created_at": _serialize_dt(now),
             "responded_at": None,
         }
@@ -190,6 +216,33 @@ class FirestoreStore:
             {"status": CaseStatus.AWAITING_APPLICANT.value, "updated_at": _serialize_dt(now)}
         )
         return Claim(id=claim_id, case_id=case_id, message=message, status="open", created_at=now)
+
+    def respond_to_claim(self, case_id: str, claim_id: str, response_message: str) -> Claim | None:
+        ref = self._cases().document(case_id).collection("claims").document(claim_id)
+        snap = ref.get()
+        if not snap.exists:
+            return None
+        now = _now()
+        ref.update(
+            {
+                "status": "resolved",
+                "response_message": response_message,
+                "responded_at": _serialize_dt(now),
+            }
+        )
+        self._cases().document(case_id).update(
+            {"status": CaseStatus.AWAITING_CLERK.value, "updated_at": _serialize_dt(now)}
+        )
+        data = ref.get().to_dict() or {}
+        return Claim(
+            id=claim_id,
+            case_id=case_id,
+            message=data["message"],
+            status=data["status"],
+            response_message=data.get("response_message"),
+            created_at=_parse_dt(data["created_at"]),
+            responded_at=_parse_dt(data["responded_at"]) if data.get("responded_at") else None,
+        )
 
     def list_claims(self, case_id: str) -> list[Claim]:
         claims: list[Claim] = []
@@ -202,6 +255,7 @@ class FirestoreStore:
                     case_id=data["case_id"],
                     message=data["message"],
                     status=data["status"],
+                    response_message=data.get("response_message"),
                     created_at=_parse_dt(data["created_at"]),
                     responded_at=_parse_dt(responded) if responded else None,
                 )
@@ -215,6 +269,47 @@ class FirestoreStore:
 
     def count_cases(self) -> int:
         return sum(1 for _ in self._cases().stream())
+
+    def _clerks(self):
+        return self._db.collection("clerks")
+
+    def list_clerks(self) -> list[dict[str, Any]]:
+        return [snap.to_dict() or {} | {"username": snap.id} for snap in self._clerks().stream()]
+
+    def upsert_clerk(
+        self,
+        *,
+        username: str,
+        full_name: str,
+        role: str,
+        hashed_password: str,
+    ) -> None:
+        self._clerks().document(username).set(
+            {
+                "full_name": full_name,
+                "role": role,
+                "hashed_password": hashed_password,
+                "updated_at": _serialize_dt(_now()),
+            }
+        )
+
+    def get_clerk(self, username: str) -> dict[str, Any] | None:
+        snap = self._clerks().document(username).get()
+        if not snap.exists:
+            return None
+        data = snap.to_dict() or {}
+        return {"username": username, **data}
+
+    def get_intake_document(self, case_id: str) -> IntakeDocument | None:
+        snap = self._cases().document(case_id).collection("intake").document("packet").get()
+        if not snap.exists:
+            return None
+        data = snap.to_dict() or {}
+        return IntakeDocument(
+            redacted_text=data.get("redacted_text", ""),
+            pii_findings=list(data.get("pii_findings") or []),
+            stored_at=_parse_dt(data["stored_at"]),
+        )
 
     def save_intake_packet(self, case_id: str, redacted_text: str, pii_findings: list[str]) -> None:
         self._cases().document(case_id).collection("intake").document("packet").set(
