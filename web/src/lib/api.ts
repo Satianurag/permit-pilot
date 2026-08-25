@@ -1,5 +1,6 @@
 import { clearSession, getToken } from "./auth";
 import { parseApiError } from "./errors";
+import { consumeReturnPath, saveReturnPath } from "./returnPath";
 
 export type ReviewStatus = "checking" | "pass" | "fail" | "needs_info";
 
@@ -9,6 +10,7 @@ export interface Task {
   title: string;
   task_type: string;
   status: string;
+  assignee: string | null;
   created_at: string;
 }
 
@@ -48,17 +50,47 @@ export interface Claim {
   message: string;
   status: string;
   response_message: string | null;
+  notification_channel: string | null;
+  notification_reference: string | null;
+  notified_at: string | null;
   created_at: string;
   responded_at: string | null;
 }
 
-export interface AuditEvent {
+export interface RelatedPermit {
+  job_number: string | null;
+  work_type: string | null;
+  status: string | null;
+  filing_date: string | null;
+}
+
+export interface ParcelContext {
+  latitude: number | null;
+  longitude: number | null;
+  map_url: string | null;
+  zoning_district: string | null;
+}
+
+export interface ClerkBriefing {
+  summary: string;
+  model: string;
+  generated_at: string;
+  generated_by: string;
+}
+
+export interface ConditionTemplate {
   id: string;
-  case_id: string;
-  actor: string;
-  action: string;
-  detail: string;
-  at: string;
+  label: string;
+  code: string;
+}
+
+export interface AddressMatch {
+  address: string;
+  bbl: string;
+  bin: string;
+  borough: string;
+  owner: string;
+  zoning_district: string;
 }
 
 export interface AgentCard {
@@ -101,12 +133,20 @@ export interface IntakePayload {
   owner?: string;
   borough?: string | null;
   packet_text?: string;
+  packet_filename?: string | null;
+  packet_content_type?: string | null;
+  plan_filename?: string | null;
+  plan_content_type?: string | null;
+  plan_pdf_base64?: string | null;
 }
 
 export interface IntakeDocument {
   redacted_text: string;
   pii_findings: string[];
   stored_at: string;
+  filename: string | null;
+  content_type: string | null;
+  has_pdf: boolean;
 }
 
 export interface CaseBundle {
@@ -122,6 +162,18 @@ export interface CaseBundle {
     gcp_workflows_url: string | null;
   };
   document: IntakeDocument | null;
+  related_permits: RelatedPermit[];
+  parcel: ParcelContext | null;
+  briefing: ClerkBriefing | null;
+}
+
+export interface AuditEvent {
+  id: string;
+  case_id: string;
+  actor: string;
+  action: string;
+  detail: string;
+  at: string;
 }
 
 export interface ClerkProfile {
@@ -144,8 +196,11 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
   const res = await fetch(`${apiBase()}${path}`, { ...init, headers });
   if (res.status === 401) {
+    const returnPath = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    saveReturnPath(returnPath);
     clearSession();
-    window.location.href = "/login";
+    const login = `/login?expired=1`;
+    window.location.href = login;
     throw new Error("Your session expired. Sign in again.");
   }
   if (!res.ok) throw new Error(await parseApiError(res));
@@ -176,9 +231,23 @@ export const api = {
     return res.json() as Promise<{ access_token: string; token_type: string }>;
   },
   me: () => get<ClerkProfile>("/auth/me"),
-  listTasks: (status = "open") => get<Task[]>(`/tasks?status=${encodeURIComponent(status)}`),
-  listCases: (q?: string) => get<Case[]>(`/cases${q ? `?q=${encodeURIComponent(q)}` : ""}`),
+  listTasks: (status = "open", mine = true) =>
+    get<Task[]>(`/tasks?status=${encodeURIComponent(status)}${mine ? "&mine=true" : ""}`),
+  listCases: (q?: string, status?: string) => {
+    const params = new URLSearchParams();
+    if (q?.trim()) params.set("q", q.trim());
+    if (status?.trim()) params.set("status", status.trim());
+    const query = params.toString();
+    return get<Case[]>(`/cases${query ? `?${query}` : ""}`);
+  },
+  resolveAddress: (address: string, borough: string) =>
+    get<{ matches: AddressMatch[] }>(
+      `/nyc/resolve-address?address=${encodeURIComponent(address)}&borough=${encodeURIComponent(borough)}`,
+    ),
+  listConditions: () => get<ConditionTemplate[]>("/config/conditions"),
   getCaseBundle: (id: string) => get<CaseBundle>(`/cases/${id}/bundle`),
+  getPlanPdf: (id: string) =>
+    get<{ filename: string; content_type: string; pdf_base64: string }>(`/cases/${id}/documents/pdf`),
   refreshDistribution: (id: string) => post<DepartmentReview[]>(`/cases/${id}/distribution/refresh`),
   intake: (payload: IntakePayload) => post<Case>("/cases/intake", payload),
   createClaim: (id: string, message: string) => post<Claim>(`/cases/${id}/claims`, { message }),
@@ -188,5 +257,16 @@ export const api = {
     post<Case>(`/cases/${id}/decision`, { decision, note, override }),
   orchestrate: (id: string) => post<{ summary: string; model: string }>(`/cases/${id}/orchestrate`),
   resumeWorkflow: (id: string) => post<{ step: unknown; steps: WorkflowStep[] }>(`/cases/${id}/workflow/resume`),
+  interruptWorkflow: (id: string) => post<{ step: WorkflowStep; steps: WorkflowStep[] }>(`/cases/${id}/workflow/interrupt`),
+  startGcpWorkflow: (id: string) => post<{ execution_id: string; case_id: string }>(`/cases/${id}/workflow/gcp-run`),
   listAgents: () => get<AgentCard[]>("/agents"),
+  invokeAgent: (name: string, signature: string | null, caseId?: string) =>
+    request<{ status: string; message: string }>(`/agents/${name}/invoke`, {
+      method: "POST",
+      headers: {
+        ...(signature ? { "X-Agent-Signature": signature } : {}),
+        ...(caseId ? { "X-Case-Id": caseId } : {}),
+      },
+    }),
+  consumeReturnPath,
 };

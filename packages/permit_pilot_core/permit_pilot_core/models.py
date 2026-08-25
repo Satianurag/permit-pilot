@@ -27,6 +27,7 @@ class Department(StrEnum):
     FIRE = "fire"
     UTILITIES = "utilities"
     LANDMARKS = "landmarks"
+    HOUSING = "housing"
     CRITIC = "critic"
 
 
@@ -83,6 +84,11 @@ class IntakeRequest(BaseModel):
     owner: str = ""
     borough: str | None = None
     packet_text: str = ""
+    packet_filename: str | None = None
+    packet_content_type: str | None = None
+    plan_filename: str | None = None
+    plan_content_type: str | None = None
+    plan_pdf_base64: str | None = None
 
 
 class Task(BaseModel):
@@ -91,6 +97,7 @@ class Task(BaseModel):
     title: str
     task_type: str
     status: str
+    assignee: str | None = None
     created_at: datetime
 
 
@@ -100,6 +107,9 @@ class Claim(BaseModel):
     message: str
     status: str
     response_message: str | None = None
+    notification_channel: str | None = None
+    notification_reference: str | None = None
+    notified_at: datetime | None = None
     created_at: datetime
     responded_at: datetime | None = None
 
@@ -112,6 +122,30 @@ class IntakeDocument(BaseModel):
     redacted_text: str
     pii_findings: list[str]
     stored_at: datetime
+    filename: str | None = None
+    content_type: str | None = None
+    has_pdf: bool = False
+
+
+class RelatedPermit(BaseModel):
+    job_number: str | None = None
+    work_type: str | None = None
+    status: str | None = None
+    filing_date: str | None = None
+
+
+class ParcelContext(BaseModel):
+    latitude: float | None = None
+    longitude: float | None = None
+    map_url: str | None = None
+    zoning_district: str | None = None
+
+
+class ClerkBriefing(BaseModel):
+    summary: str
+    model: str
+    generated_at: datetime
+    generated_by: str
 
 
 class AuditEvent(BaseModel):
@@ -132,6 +166,9 @@ class CaseBundle(BaseModel):
     trace: list[Any]
     observability: dict[str, str | None]
     document: IntakeDocument | None = None
+    related_permits: list[RelatedPermit] = Field(default_factory=list)
+    parcel: ParcelContext | None = None
+    briefing: ClerkBriefing | None = None
 
 
 class CaseDecision(BaseModel):

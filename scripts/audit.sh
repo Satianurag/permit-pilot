@@ -40,10 +40,14 @@ echo "=== 6. Trace + observability ==="
 curl -fsS "${AUTH[@]}" "$BASE/api/cases/$CASE_ID/trace" >/dev/null
 curl -fsS "${AUTH[@]}" "$BASE/api/config/observability?case_id=$CASE_ID" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d.get('cloud_trace_url')"
 
-echo "=== 7. Permit search ==="
+echo "=== 7. Permit search + conditions library ==="
 curl -fsS "${AUTH[@]}" "$BASE/api/cases?q=BIN" >/dev/null
+curl -fsS "${AUTH[@]}" "$BASE/api/config/conditions" | python3 -c "import sys,json; d=json.load(sys.stdin); assert len(d)>=3, 'conditions library'"
 
-echo "=== 8. SPA login route ==="
+echo "=== 8. NYC address resolve (live PLUTO) ==="
+curl -fsS "${AUTH[@]}" "$BASE/api/nyc/resolve-address?address=520%20FIFTH%20AVE&borough=Manhattan" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['matches'][0]['bbl']"
+
+echo "=== 9. SPA login route ==="
 curl -fsS -o /dev/null -w "%{http_code}\n" "$BASE/login" | grep -q 200
 
 echo "ALL CHECKS PASSED — $BASE"

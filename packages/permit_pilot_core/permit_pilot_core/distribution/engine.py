@@ -19,6 +19,22 @@ BOROUGH_NAMES = {
     "SI": "STATEN ISLAND",
 }
 
+_BUILDING_FAIL_CITATION = Citation(
+    code="1 RCNY 101-07",
+    excerpt="Open DOB violations must be resolved or dismissed before permit approval.",
+    source_url="https://github.com/BetaNYC/nyc-charter-laws-rules",
+)
+_FIRE_FAIL_CITATION = Citation(
+    code="FC 901.7",
+    excerpt="Open fire code violations require correction or documented clearance before approval.",
+    source_url="https://github.com/BetaNYC/nyc-charter-laws-rules",
+)
+_HOUSING_FAIL_CITATION = Citation(
+    code="HMC §27-2115",
+    excerpt="Class A or B HPD violations must be corrected before related permit work proceeds.",
+    source_url="https://github.com/BetaNYC/nyc-charter-laws-rules",
+)
+
 
 def _house_number(address: str) -> str:
     token = address.strip().split(" ", 1)[0]
@@ -27,6 +43,31 @@ def _house_number(address: str) -> str:
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+def _is_active_dob_violation(row: dict) -> bool:
+    category = str(row.get("violation_category", "")).upper()
+    if "ACTIVE" in category:
+        return True
+    if category and "CLOSED" in category:
+        return False
+    disposition = str(row.get("disposition_date", "")).strip()
+    return not disposition
+
+
+def _is_open_hpd_violation(row: dict) -> bool:
+    approved = str(row.get("approveddate", "")).strip()
+    if approved:
+        return False
+    violation_class = str(row.get("class", "")).upper()
+    return violation_class in {"A", "B", "C", "I"} or not approved
+
+
+def _is_open_fdny_violation(row: dict) -> bool:
+    status = str(row.get("violation_status", row.get("status", ""))).upper()
+    if not status:
+        return False
+    return status not in {"CLOSED", "DISMISSED", "RESOLVED", "PAID"}
 
 
 class DistributionEngine:
@@ -40,6 +81,7 @@ class DistributionEngine:
             await self.review_fire(bin_=bin_),
             await self.review_utilities(bbl=bbl, bin_=bin_),
             await self.review_landmarks(bbl=bbl, work_type=work_type),
+            await self.review_housing(bin_=bin_),
         ]
 
     async def run_all(self, *, bbl: str, bin_: str, work_type: str) -> list[DepartmentReview]:
@@ -92,13 +134,15 @@ class DistributionEngine:
         permits = await self._socrata.permits_by_bbl(bbl)
         filings = await self._socrata.filings_by_bin(bin_) if bin_ else []
         violations = await self._socrata.dob_violations_by_bin(bin_) if bin_ else []
-        open_violations = [
-            v for v in violations if str(v.get("violation_category", "")).lower() != "closed"
-        ]
-        status = ReviewStatus.PASS if len(open_violations) < 20 else ReviewStatus.FAIL
-        summary = (
-            f"{len(permits)} permits on record; {len(open_violations)} open DOB violations."
-        )
+        active_violations = [v for v in violations if _is_active_dob_violation(v)]
+        if active_violations:
+            status = ReviewStatus.FAIL
+            summary = f"{len(active_violations)} active DOB violation(s) on BIN — must be resolved before approval."
+            citations = [_BUILDING_FAIL_CITATION]
+        else:
+            status = ReviewStatus.PASS
+            summary = f"{len(permits)} permits on record; no active DOB violations on BIN."
+            citations = []
         return DepartmentReview(
             department=Department.BUILDING,
             status=status,
@@ -106,7 +150,7 @@ class DistributionEngine:
             findings=[
                 f"Permit rows on BBL: {len(permits)}",
                 f"Filing rows on BIN: {len(filings)}",
-                f"Open DOB violations on BIN: {len(open_violations)}",
+                f"Active DOB violations on BIN: {len(active_violations)}",
             ],
             evidence=[
                 EvidenceItem(
@@ -118,10 +162,11 @@ class DistributionEngine:
                 EvidenceItem(
                     source="NYC Open Data",
                     dataset_id="3h2n-5cm9",
-                    label="open_violation_count",
-                    value=len(open_violations),
+                    label="active_violation_count",
+                    value=len(active_violations),
                 ),
             ],
+            citations=citations,
             updated_at=_now(),
         )
 
@@ -134,20 +179,80 @@ class DistributionEngine:
                 updated_at=_now(),
             )
         rows = await self._socrata.fdny_violations_by_bin(bin_)
-        status = ReviewStatus.PASS if len(rows) == 0 else ReviewStatus.FAIL
+        open_rows = [row for row in rows if _is_open_fdny_violation(row)]
+        if open_rows:
+            status = ReviewStatus.FAIL
+            summary = f"{len(open_rows)} open FDNY violation record(s) on BIN."
+            citations = [_FIRE_FAIL_CITATION]
+        else:
+            status = ReviewStatus.PASS
+            historical = len(rows)
+            summary = (
+                f"No open FDNY violations on BIN."
+                if historical == 0
+                else f"No open FDNY violations; {historical} historical record(s) on file."
+            )
+            citations = []
         return DepartmentReview(
             department=Department.FIRE,
             status=status,
-            summary=f"{len(rows)} FDNY violation records on BIN.",
-            findings=[f"FDNY historical violations: {len(rows)}"],
+            summary=summary,
+            findings=[
+                f"FDNY records on BIN: {len(rows)}",
+                f"Open FDNY violations: {len(open_rows)}",
+            ],
             evidence=[
                 EvidenceItem(
                     source="NYC Open Data",
                     dataset_id="bi53-yph3",
-                    label="violation_count",
-                    value=len(rows),
+                    label="open_violation_count",
+                    value=len(open_rows),
                 )
             ],
+            citations=citations,
+            updated_at=_now(),
+        )
+
+    async def review_housing(self, *, bin_: str) -> DepartmentReview:
+        if not bin_:
+            return DepartmentReview(
+                department=Department.HOUSING,
+                status=ReviewStatus.NEEDS_INFO,
+                summary="BIN required for HPD violation lookup.",
+                updated_at=_now(),
+            )
+        rows = await self._socrata.hpd_violations_by_bin(bin_)
+        open_rows = [row for row in rows if _is_open_hpd_violation(row)]
+        class_a = [row for row in open_rows if str(row.get("class", "")).upper() == "A"]
+        if class_a:
+            status = ReviewStatus.FAIL
+            summary = f"{len(class_a)} open Class A HPD violation(s) on BIN."
+            citations = [_HOUSING_FAIL_CITATION]
+        elif open_rows:
+            status = ReviewStatus.NEEDS_INFO
+            summary = f"{len(open_rows)} open HPD violation(s) — confirm correction before approval."
+            citations = []
+        else:
+            status = ReviewStatus.PASS
+            summary = "No open HPD violations on BIN."
+            citations = []
+        return DepartmentReview(
+            department=Department.HOUSING,
+            status=status,
+            summary=summary,
+            findings=[
+                f"HPD violation rows on BIN: {len(rows)}",
+                f"Open HPD violations: {len(open_rows)}",
+            ],
+            evidence=[
+                EvidenceItem(
+                    source="NYC Open Data",
+                    dataset_id="wvxf-dwi5",
+                    label="open_hpd_violation_count",
+                    value=len(open_rows),
+                )
+            ],
+            citations=citations,
             updated_at=_now(),
         )
 
@@ -179,6 +284,15 @@ class DistributionEngine:
             if str(row.get("compliance_status", "")).lower() not in {"dismissed", "paid in full"}
         ]
         status = ReviewStatus.PASS if len(open_rows) == 0 else ReviewStatus.FAIL
+        citations = []
+        if open_rows:
+            citations.append(
+                Citation(
+                    code="DEP Rules",
+                    excerpt="Open DEP ECB violations must be resolved before permit approval.",
+                    source_url="https://github.com/BetaNYC/nyc-charter-laws-rules",
+                )
+            )
         return DepartmentReview(
             department=Department.UTILITIES,
             status=status,
@@ -201,6 +315,7 @@ class DistributionEngine:
                     value=len(open_rows),
                 ),
             ],
+            citations=citations,
             updated_at=_now(),
         )
 
@@ -217,6 +332,7 @@ class DistributionEngine:
                 Citation(
                     code="NYC LPC",
                     excerpt="Work affecting landmark properties requires Landmarks Preservation Commission approval.",
+                    source_url="https://github.com/BetaNYC/nyc-charter-laws-rules",
                 )
             ]
         elif in_landmark:
@@ -292,3 +408,36 @@ class DistributionEngine:
             ],
             updated_at=_now(),
         )
+
+    async def related_permits(self, *, bbl: str, bin_: str) -> list[dict]:
+        permits = await self._socrata.permits_by_bbl(bbl)
+        if bin_:
+            permits = permits + await self._socrata.permits_by_bin(bin_)
+        seen: set[str] = set()
+        rows: list[dict] = []
+        for row in permits:
+            key = str(row.get("job__") or row.get("job_") or row.get("job_number") or row.get("permit_si_no") or "")
+            if key and key in seen:
+                continue
+            if key:
+                seen.add(key)
+            rows.append(row)
+        return rows[:25]
+
+    async def parcel_context(self, *, bbl: str) -> dict:
+        rows = await self._socrata.pluto_by_bbl(bbl, limit=1)
+        if not rows:
+            return {}
+        lot = rows[0]
+        lat = lot.get("latitude")
+        lon = lot.get("longitude")
+        district = lot.get("zonedist1") or lot.get("zonedist")
+        map_url = None
+        if lat and lon:
+            map_url = f"https://www.google.com/maps?q={lat},{lon}"
+        return {
+            "latitude": float(lat) if lat else None,
+            "longitude": float(lon) if lon else None,
+            "map_url": map_url,
+            "zoning_district": str(district) if district else None,
+        }

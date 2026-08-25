@@ -1,19 +1,27 @@
 import { FormEvent, useState } from "react";
-import { Navigate, useNavigate } from "react-router-dom";
+import { Navigate, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../lib/api";
 import { isAuthenticated, setSession, setToken } from "../lib/auth";
 import { errorMessage } from "../lib/errors";
 
 export default function LoginPage() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const [params] = useSearchParams();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const expired = params.get("expired") === "1";
 
   if (isAuthenticated()) {
-    return <Navigate to="/tasks" replace />;
+    const from = location.state as { from?: { pathname?: string; search?: string; hash?: string } } | null;
+    const target =
+      from?.from?.pathname
+        ? `${from.from.pathname}${from.from.search ?? ""}${from.from.hash ?? ""}`
+        : api.consumeReturnPath();
+    return <Navigate to={target} replace />;
   }
 
   const submit = async (event: FormEvent) => {
@@ -25,7 +33,12 @@ export default function LoginPage() {
       setToken(token.access_token);
       const profile = await api.me();
       setSession(token.access_token, profile);
-      navigate("/tasks");
+      const from = location.state as { from?: { pathname?: string; search?: string; hash?: string } } | null;
+      const target =
+        from?.from?.pathname
+          ? `${from.from.pathname}${from.from.search ?? ""}${from.from.hash ?? ""}`
+          : api.consumeReturnPath();
+      navigate(target, { replace: true });
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -39,6 +52,15 @@ export default function LoginPage() {
         <p className="text-xs uppercase tracking-widest text-slate-500">NYC Department of Buildings</p>
         <h1 className="mt-1 text-2xl font-semibold text-pp-navy">Permit Pilot</h1>
         <p className="mt-2 text-sm text-slate-600">Clerk sign-in for the review queue and case files.</p>
+        {expired && (
+          <p className="mt-4 text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded-md p-3" role="status">
+            Your session expired. Sign in again to return to your case.
+          </p>
+        )}
+        <p className="mt-3 text-xs text-slate-500">
+          Production NYC.ID SSO is planned; this demo uses clerk accounts stored in Firestore. Sessions end when you
+          close the browser tab.
+        </p>
         {error && (
           <p className="mt-4 text-sm text-red-700 bg-red-50 border border-red-200 rounded-md p-3" role="alert">
             {error}
@@ -82,6 +104,7 @@ export default function LoginPage() {
                 {showPassword ? "Hide" : "Show"}
               </button>
             </div>
+            <p className="mt-1 text-xs text-slate-500">Repeated failed sign-in attempts are logged server-side.</p>
           </div>
           <button
             type="submit"

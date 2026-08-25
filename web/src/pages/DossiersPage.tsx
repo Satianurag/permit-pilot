@@ -7,9 +7,19 @@ import { api, Case } from "../lib/api";
 import { errorMessage } from "../lib/errors";
 import { useDebouncedValue } from "../lib/useDebouncedValue";
 
+const STATUS_FILTERS = [
+  { id: "", label: "All statuses" },
+  { id: "in_review", label: "In review" },
+  { id: "awaiting_clerk", label: "Awaiting clerk" },
+  { id: "awaiting_applicant", label: "Awaiting applicant" },
+  { id: "approved", label: "Approved" },
+  { id: "changes_requested", label: "Changes requested" },
+] as const;
+
 export default function DossiersPage() {
   const [params, setParams] = useSearchParams();
   const urlQuery = params.get("q") ?? "";
+  const urlStatus = params.get("status") ?? "";
   const [draft, setDraft] = useState(urlQuery);
   const debounced = useDebouncedValue(draft, 300);
   const [cases, setCases] = useState<Case[]>([]);
@@ -27,35 +37,61 @@ export default function DossiersPage() {
   useEffect(() => {
     setLoading(true);
     api
-      .listCases(urlQuery.trim() || undefined)
+      .listCases(urlQuery.trim() || undefined, urlStatus || undefined)
       .then(setCases)
       .catch((err: Error) => setError(err.message))
       .finally(() => setLoading(false));
-  }, [urlQuery]);
+  }, [urlQuery, urlStatus]);
 
   useEffect(() => {
     const onPop = () => {
-      setDraft(new URLSearchParams(window.location.search).get("q") ?? "");
+      const next = new URLSearchParams(window.location.search);
+      setDraft(next.get("q") ?? "");
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
 
+  const setStatus = (status: string) => {
+    const next = new URLSearchParams(params);
+    if (status) next.set("status", status);
+    else next.delete("status");
+    setParams(next, { replace: true });
+  };
+
   return (
     <div className="space-y-4">
       <div>
         <h2 className="text-2xl font-semibold text-pp-navy">Permit search</h2>
-        <p className="text-sm text-slate-600">Find a dossier by address, BBL, BIN, owner, or status. Search waits 300ms after you stop typing.</p>
+        <p className="text-sm text-slate-600">
+          Find a dossier by address, BBL, BIN, owner, or status. Search waits 300ms after you stop typing.
+        </p>
       </div>
-      <label className="block">
-        <span className="sr-only">Search permits</span>
-        <input
-          className="w-full max-w-xl border border-pp-border rounded-md px-3 py-2 text-sm"
-          placeholder="Search address, BBL, BIN, owner, status…"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-        />
-      </label>
+      <div className="flex flex-col sm:flex-row gap-3 max-w-3xl">
+        <label className="block flex-1">
+          <span className="sr-only">Search permits</span>
+          <input
+            className="w-full border border-pp-border rounded-md px-3 py-2 text-sm"
+            placeholder="Search address, BBL, BIN, owner, status…"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+          />
+        </label>
+        <label className="block sm:w-56">
+          <span className="sr-only">Filter by status</span>
+          <select
+            className="w-full border border-pp-border rounded-md px-3 py-2 text-sm"
+            value={urlStatus}
+            onChange={(e) => setStatus(e.target.value)}
+          >
+            {STATUS_FILTERS.map((item) => (
+              <option key={item.id || "all"} value={item.id}>
+                {item.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
       {error && (
         <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-md p-3" role="alert">
           {errorMessage(error)}
@@ -64,7 +100,7 @@ export default function DossiersPage() {
       {loading ? (
         <Skeleton rows={6} label="Loading permits" />
       ) : cases.length === 0 ? (
-        <EmptyState title="No permits match your search" description="Try a different address, BBL, or BIN." />
+        <EmptyState title="No permits match your search" description="Try a different address, BBL, BIN, or status." />
       ) : (
         <div className="table-scroll rounded-lg border border-pp-border bg-white" tabIndex={0}>
           <table className="min-w-full text-sm">

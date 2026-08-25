@@ -14,7 +14,7 @@ from permit_pilot_core.observability.telemetry import setup_telemetry
 from permit_pilot_core.seeds import ensure_seeded
 from permit_pilot_api.clerk_accounts import ensure_cloud_clerks
 from permit_pilot_api.config import cors_origins, gcp_project_id, seed_on_startup
-from permit_pilot_api.routes import agents, auth_routes, cases, config, intake, orchestrate, tasks, workflow
+from permit_pilot_api.routes import agents, auth_routes, cases, config, intake, nyc, orchestrate, tasks, workflow
 
 
 @asynccontextmanager
@@ -50,6 +50,7 @@ app.include_router(auth_routes.router, prefix="/api")
 app.include_router(tasks.router, prefix="/api")
 app.include_router(cases.router, prefix="/api")
 app.include_router(intake.router, prefix="/api")
+app.include_router(nyc.router, prefix="/api")
 app.include_router(workflow.router, prefix="/api")
 app.include_router(orchestrate.router, prefix="/api")
 app.include_router(config.router, prefix="/api")

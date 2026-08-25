@@ -25,13 +25,13 @@ export default function ConfirmDialog({
   const titleId = useId();
   const descId = useId();
   const dialogRef = useRef<HTMLDialogElement>(null);
-  const confirmRef = useRef<HTMLButtonElement>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     const node = dialogRef.current;
     if (!node || !open) return;
     node.showModal();
-    confirmRef.current?.focus();
+    cancelRef.current?.focus();
     return () => node.close();
   }, [open]);
 
@@ -50,11 +50,15 @@ export default function ConfirmDialog({
         {description}
       </p>
       <div className="mt-6 flex justify-end gap-2">
-        <button type="button" onClick={onCancel} className="px-4 py-2 text-sm rounded-md border border-pp-border">
+        <button
+          ref={cancelRef}
+          type="button"
+          onClick={onCancel}
+          className="px-4 py-2 text-sm rounded-md border border-pp-border"
+        >
           Cancel
         </button>
         <button
-          ref={confirmRef}
           type="button"
           disabled={busy}
           onClick={onConfirm}

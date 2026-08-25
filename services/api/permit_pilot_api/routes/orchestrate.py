@@ -41,6 +41,12 @@ def orchestrate(
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"Briefing generation failed: {exc}") from exc
 
+    store.save_briefing(
+        case_id,
+        summary=summary,
+        model="vertex",
+        generated_by=clerk_actor(current_user),
+    )
     store.append_audit(
         case_id,
         actor=clerk_actor(current_user),

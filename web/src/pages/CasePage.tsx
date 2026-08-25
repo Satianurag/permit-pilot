@@ -6,7 +6,8 @@ import ModalDialog from "../components/ModalDialog";
 import Skeleton from "../components/Skeleton";
 import { StatusBadge } from "../components/StatusBadge";
 import TraceReplay from "../components/TraceReplay";
-import { api, Case, CaseBundle, Claim, DepartmentReview, Task } from "../lib/api";
+import { useToast } from "../components/Toast";
+import { api, Case, CaseBundle, Claim, ConditionTemplate, DepartmentReview, Task } from "../lib/api";
 import { getStoredUser, isAdmin } from "../lib/auth";
 import { readBriefing, writeBriefing } from "../lib/briefingCache";
 import { errorMessage } from "../lib/errors";
@@ -25,6 +26,7 @@ export default function CasePage() {
   const caseId = id!;
   const tabsId = useId();
   const navigate = useNavigate();
+  const { push } = useToast();
   const [params, setParams] = useSearchParams();
   const tab: Tab = isTab(params.get("tab")) ? (params.get("tab") as Tab) : "summary";
   const from = params.get("from") === "search" ? "search" : "tasks";
@@ -40,6 +42,8 @@ export default function CasePage() {
   const [busy, setBusy] = useState<string | null>(null);
   const [approveOpen, setApproveOpen] = useState(false);
   const [changesOpen, setChangesOpen] = useState(false);
+  const [conditions, setConditions] = useState<ConditionTemplate[]>([]);
+  const [planUrl, setPlanUrl] = useState<string | null>(null);
   const [nextTask, setNextTask] = useState<Task | null>(null);
   const admin = isAdmin(getStoredUser());
 
@@ -85,13 +89,52 @@ export default function CasePage() {
   useEffect(() => load(), [load]);
 
   useEffect(() => {
+    api.listConditions().then(setConditions).catch(() => setConditions([]));
+  }, []);
+
+  useEffect(() => {
     setBriefing(readBriefing(caseId));
     setNextTask(null);
+    setPlanUrl(null);
   }, [caseId]);
+
+  useEffect(() => {
+    if (bundle?.briefing?.summary) {
+      setBriefing(bundle.briefing.summary);
+      writeBriefing(caseId, bundle.briefing.summary);
+    }
+  }, [bundle?.briefing, caseId]);
+
+  useEffect(() => {
+    if (!bundle?.document?.has_pdf) {
+      setPlanUrl(null);
+      return;
+    }
+    let active = true;
+    let objectUrl: string | null = null;
+    api
+      .getPlanPdf(caseId)
+      .then((pdf) => {
+        if (!active) return;
+        const bytes = Uint8Array.from(atob(pdf.pdf_base64), (ch) => ch.charCodeAt(0));
+        const blob = new Blob([bytes], { type: pdf.content_type });
+        objectUrl = URL.createObjectURL(blob);
+        setPlanUrl(objectUrl);
+      })
+      .catch(() => {
+        if (active) setPlanUrl(null);
+      });
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [bundle?.document?.has_pdf, caseId]);
 
   const caseData: Case | null = bundle?.case ?? null;
   const canDecide = Boolean(caseData && !TERMINAL.has(caseData.status));
-  const failed = bundle?.distribution.filter((row) => row.status === "fail") ?? [];
+  const failed = bundle?.distribution.filter((row) => row.status === "fail" && row.department !== "critic") ?? [];
+  const needsInfo =
+    bundle?.distribution.filter((row) => row.status === "needs_info" && row.department !== "critic") ?? [];
   const checking = bundle?.distribution.some((row) => row.status === "checking") ?? false;
   const stalled = bundle?.workflow.some((step) => step.status === "failed" || step.status === "interrupted") ?? false;
 
@@ -101,28 +144,41 @@ export default function CasePage() {
     return () => window.clearInterval(timer);
   }, [checking, load]);
 
-  const runAction = async (key: string, action: () => Promise<void>) => {
+  const runAction = async (key: string, action: () => Promise<void>, successMessage?: string) => {
     setBusy(key);
     setError(null);
     try {
       await action();
       load(true);
+      if (successMessage) push(successMessage, "success");
     } catch (err) {
-      setError(errorMessage(err));
+      const message = errorMessage(err);
+      setError(message);
+      push(message, "error");
     } finally {
       setBusy(null);
     }
   };
 
+  const appendCondition = (template: ConditionTemplate) => {
+    const line = `${template.code}: ${template.label}`;
+    setNote((current) => (current.trim() ? `${current.trim()}\n${line}` : line));
+    document.getElementById("clerk-note")?.focus();
+  };
+
   const decide = (decision: string, override = false) =>
-    runAction("decide", async () => {
-      if (!note.trim()) throw new Error("Clerk note is required for the audit trail");
-      await api.decide(caseId, decision, note.trim(), override);
-      setApproveOpen(false);
-      setChangesOpen(false);
-      const queue = await api.listTasks("open");
-      setNextTask(queue.find((task) => task.case_id !== caseId) ?? null);
-    });
+    runAction(
+      "decide",
+      async () => {
+        if (!note.trim()) throw new Error("Clerk note is required for the audit trail");
+        await api.decide(caseId, decision, note.trim(), override);
+        setApproveOpen(false);
+        setChangesOpen(false);
+        const queue = await api.listTasks("open");
+        setNextTask(queue.find((task) => task.case_id !== caseId) ?? null);
+      },
+      decision === "approve" ? "Dossier approved." : "Changes requested.",
+    );
 
   if (loading && !bundle) {
     return <Skeleton rows={8} label="Loading case" />;
@@ -175,6 +231,17 @@ export default function CasePage() {
           a recorded override.
         </p>
       )}
+      {needsInfo.length > 0 && canDecide && (
+        <p className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded-md p-3" role="status">
+          {needsInfo.length} department review{needsInfo.length === 1 ? "" : "s"} need more information (
+          {needsInfo.map((row) => row.department).join(", ")}). Request changes or approve with override.
+        </p>
+      )}
+      {checking && canDecide && (
+        <p className="text-sm text-blue-900 bg-blue-50 border border-blue-200 rounded-md p-3" role="status">
+          Distribution is still running. Approval is blocked until department reviews finish.
+        </p>
+      )}
 
       <div
         role="tablist"
@@ -223,28 +290,65 @@ export default function CasePage() {
                 <dt className="text-slate-500">Work</dt>
                 <dd className="text-right max-w-xs">{caseData.work_type}</dd>
               </div>
+              {bundle?.parcel?.zoning_district && (
+                <div className="flex justify-between gap-4">
+                  <dt className="text-slate-500">Zoning</dt>
+                  <dd>{bundle.parcel.zoning_district}</dd>
+                </div>
+              )}
+              {bundle?.parcel?.map_url && (
+                <div className="pt-2">
+                  <a
+                    href={bundle.parcel.map_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-sm text-pp-accent hover:underline"
+                  >
+                    Open parcel map (NYC Open Data)
+                  </a>
+                </div>
+              )}
             </dl>
           </div>
-          <div className="bg-white border border-pp-border rounded-lg p-4">
-            <h3 className="font-medium text-pp-navy mb-3">Case timeline</h3>
-            <p className="text-sm text-slate-600">Opened {new Date(caseData.created_at).toLocaleString()}</p>
-            <p className="text-sm text-slate-600">Updated {new Date(caseData.updated_at).toLocaleString()}</p>
-            <button
-              type="button"
-              disabled={busy === "briefing"}
-              onClick={() =>
-                runAction("briefing", async () => {
-                  const result = await api.orchestrate(caseId);
-                  setBriefing(result.summary);
-                  writeBriefing(caseId, result.summary);
-                })
-              }
-              className="mt-4 text-sm px-3 py-1.5 rounded-md bg-pp-accent text-white disabled:opacity-50"
-            >
-              {busy === "briefing" ? "Generating…" : "Generate clerk briefing"}
-            </button>
-            {briefing && (
-              <p className="mt-3 text-sm text-slate-700 border-l-4 border-pp-accent pl-3 whitespace-pre-wrap">{briefing}</p>
+          <div className="bg-white border border-pp-border rounded-lg p-4 space-y-4">
+            <div>
+              <h3 className="font-medium text-pp-navy mb-3">Case timeline</h3>
+              <p className="text-sm text-slate-600">Opened {new Date(caseData.created_at).toLocaleString()}</p>
+              <p className="text-sm text-slate-600">Updated {new Date(caseData.updated_at).toLocaleString()}</p>
+              <button
+                type="button"
+                disabled={busy === "briefing"}
+                onClick={() =>
+                  runAction("briefing", async () => {
+                    const result = await api.orchestrate(caseId);
+                    setBriefing(result.summary);
+                    writeBriefing(caseId, result.summary);
+                  }, "Clerk briefing generated.")
+                }
+                className="mt-4 text-sm px-3 py-1.5 rounded-md bg-pp-accent text-white disabled:opacity-50"
+              >
+                {busy === "briefing" ? "Generating…" : "Generate clerk briefing"}
+              </button>
+              {briefing && (
+                <p className="mt-3 text-sm text-slate-700 border-l-4 border-pp-accent pl-3 whitespace-pre-wrap">{briefing}</p>
+              )}
+            </div>
+            {bundle && bundle.related_permits.length > 0 && (
+              <div>
+                <h3 className="font-medium text-pp-navy mb-2">Related permits (NYC Open Data)</h3>
+                <ul className="text-sm space-y-2">
+                  {bundle.related_permits.map((permit) => (
+                    <li key={`${permit.job_number ?? permit.work_type}-${permit.filing_date}`} className="border border-pp-border rounded p-2">
+                      <p className="font-medium">{permit.job_number || "Permit"}</p>
+                      <p className="text-slate-600">{permit.work_type || "—"}</p>
+                      <p className="text-slate-500 text-xs">
+                        {permit.status || "Unknown status"}
+                        {permit.filing_date ? ` · filed ${permit.filing_date}` : ""}
+                      </p>
+                    </li>
+                  ))}
+                </ul>
+              </div>
             )}
           </div>
         </div>
@@ -343,18 +447,19 @@ export default function CasePage() {
       )}
 
       {tab === "documents" && (
-        <div role="tabpanel" id={`${tabsId}-panel-documents`} aria-labelledby={`${tabsId}-documents`}>
+        <div role="tabpanel" id={`${tabsId}-panel-documents`} aria-labelledby={`${tabsId}-documents`} className="space-y-4">
           {!bundle?.document ? (
             <EmptyState
               title="No intake document on file"
-              description="Plan PDFs are not in this cut. Intake packets are stored as redacted text after PII removal."
+              description="Upload a plan PDF or applicant packet during intake. Packet text is stored redacted after PII removal."
             />
           ) : (
             <div className="bg-white border border-pp-border rounded-lg p-4 space-y-4">
               <div>
                 <h3 className="font-medium text-pp-navy">Intake packet (redacted)</h3>
                 <p className="text-xs text-slate-500 mt-1">
-                  Text · {bundle.document.redacted_text.length.toLocaleString()} characters · stored{" "}
+                  {bundle.document.filename ? `${bundle.document.filename} · ` : ""}
+                  {bundle.document.redacted_text.length.toLocaleString()} characters · stored{" "}
                   {new Date(bundle.document.stored_at).toLocaleString()}
                 </p>
               </div>
@@ -364,9 +469,23 @@ export default function CasePage() {
                   <p className="text-amber-800 mt-1">{bundle.document.pii_findings.join(", ")}</p>
                 </div>
               )}
-              <pre className="whitespace-pre-wrap text-sm text-slate-700 bg-slate-50 border border-pp-border rounded-md p-4">
-                {bundle.document.redacted_text || "Empty packet"}
-              </pre>
+              {bundle.document.redacted_text ? (
+                <pre className="whitespace-pre-wrap text-sm text-slate-700 bg-slate-50 border border-pp-border rounded-md p-4">
+                  {bundle.document.redacted_text}
+                </pre>
+              ) : (
+                <p className="text-sm text-slate-600">No packet text — plan PDF only.</p>
+              )}
+              {bundle.document.has_pdf && (
+                <div>
+                  <h3 className="font-medium text-pp-navy mb-2">Plan PDF</h3>
+                  {planUrl ? (
+                    <iframe title="Plan PDF" src={planUrl} className="w-full min-h-[28rem] border border-pp-border rounded-md" />
+                  ) : (
+                    <Skeleton rows={4} label="Loading plan PDF" />
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -375,7 +494,7 @@ export default function CasePage() {
       {tab === "claims" && bundle && (
         <div role="tabpanel" id={`${tabsId}-panel-claims`} aria-labelledby={`${tabsId}-claims`} className="space-y-4">
           <p className="text-sm text-slate-600">
-            Claims are recorded on the case. They do not email the applicant or open a DOB NOW thread in this version.
+            Claims are recorded on the case and handed off to DOB NOW with a reference ID for the audit trail.
           </p>
           {canDecide && (
             <div className="flex flex-col sm:flex-row gap-2">
@@ -397,7 +516,7 @@ export default function CasePage() {
                     if (!claimText.trim()) throw new Error("Enter a document request for the applicant");
                     await api.createClaim(caseId, claimText.trim());
                     setClaimText("");
-                  })
+                  }, "Claim recorded and DOB NOW handoff reference saved.")
                 }
                 className="px-4 py-2 rounded-md bg-pp-accent text-white text-sm disabled:opacity-50"
               >
@@ -416,6 +535,12 @@ export default function CasePage() {
                     <span className="text-xs text-slate-500">{new Date(claim.created_at).toLocaleString()}</span>
                   </div>
                   <p>{claim.message}</p>
+                  {claim.notification_reference && (
+                    <p className="text-xs text-slate-500">
+                      DOB NOW handoff · {claim.notification_reference}
+                      {claim.notified_at ? ` · ${new Date(claim.notified_at).toLocaleString()}` : ""}
+                    </p>
+                  )}
                   {claim.response_message && (
                     <div className="rounded-md bg-slate-50 border border-pp-border p-3">
                       <p className="text-xs font-medium text-slate-500">Applicant response (recorded by clerk)</p>
@@ -566,6 +691,25 @@ export default function CasePage() {
             {failed.length > 0 && (
               <p className="text-xs text-red-800">Failed reviews: {failed.map((row) => row.department).join(", ")}</p>
             )}
+            {needsInfo.length > 0 && (
+              <p className="text-xs text-amber-800">
+                Needs info: {needsInfo.map((row) => row.department).join(", ")}
+              </p>
+            )}
+            {conditions.length > 0 && (
+              <div className="flex flex-wrap gap-2">
+                {conditions.map((template) => (
+                  <button
+                    key={template.id}
+                    type="button"
+                    onClick={() => appendCondition(template)}
+                    className="px-2 py-1 text-xs rounded-md border border-pp-border bg-slate-50 hover:bg-white"
+                  >
+                    {template.code}
+                  </button>
+                ))}
+              </div>
+            )}
             <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
             <div className="flex flex-col gap-2 sm:flex-1">
               <label htmlFor="clerk-note" className="text-sm font-medium text-slate-700">
@@ -582,7 +726,7 @@ export default function CasePage() {
               <div className="flex gap-2">
                 <button
                   type="button"
-                  disabled={busy === "decide"}
+                  disabled={busy === "decide" || checking}
                   onClick={() => requireNote() && setApproveOpen(true)}
                   className="flex-1 sm:flex-none px-4 py-2 rounded-md bg-emerald-700 text-white text-sm font-medium disabled:opacity-50"
                 >
@@ -604,17 +748,35 @@ export default function CasePage() {
 
       <ConfirmDialog
         open={approveOpen}
-        title={failed.length ? "Approve with failed reviews?" : "Approve this dossier?"}
-        description={
+        title={
           failed.length
-            ? `Reviews failed for ${failed.map((row) => row.department).join(", ")}. Approving records an override. This closes open tasks.`
-            : `You are approving ${caseData.address}. This closes open tasks and writes the audit log.`
+            ? "Approve with failed reviews?"
+            : needsInfo.length
+              ? "Approve with open information requests?"
+              : checking
+                ? "Distribution still running"
+                : "Approve this dossier?"
         }
-        confirmLabel={failed.length ? "Approve with override" : "Approve dossier"}
+        description={
+          checking
+            ? "Department reviews are still running. Wait for distribution to finish or request changes."
+            : failed.length
+              ? `Reviews failed for ${failed.map((row) => row.department).join(", ")}. Approving records an override. This closes open tasks.`
+              : needsInfo.length
+                ? `Reviews need more information from ${needsInfo.map((row) => row.department).join(", ")}. Approving records an override.`
+                : `You are approving ${caseData.address}. This closes open tasks and writes the audit log.`
+        }
+        confirmLabel={failed.length || needsInfo.length ? "Approve with override" : "Approve dossier"}
         busy={busy === "decide"}
-        danger={failed.length > 0}
+        danger={failed.length > 0 || needsInfo.length > 0}
         onCancel={() => setApproveOpen(false)}
-        onConfirm={() => decide("approve", failed.length > 0)}
+        onConfirm={() => {
+          if (checking) {
+            setApproveOpen(false);
+            return;
+          }
+          decide("approve", failed.length > 0 || needsInfo.length > 0);
+        }}
       />
       <ConfirmDialog
         open={changesOpen}

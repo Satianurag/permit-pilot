@@ -1,5 +1,5 @@
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { clearSession, getStoredUser, isAdmin } from "../lib/auth";
+import { clearSession, getStoredUser } from "../lib/auth";
 
 interface Props {
   onOpenAgents?: () => void;
@@ -42,7 +42,7 @@ export default function AppShell({ onOpenAgents }: Props) {
               >
                 Permit search
               </Link>
-              {isAdmin(user) && onOpenAgents && (
+              {onOpenAgents && (
                 <button type="button" onClick={onOpenAgents} className="px-3 py-1.5 rounded-md hover:bg-white/10">
                   Agent registry
                 </button>
@@ -59,7 +59,7 @@ export default function AppShell({ onOpenAgents }: Props) {
           </div>
         </div>
       </header>
-      <main id="main-content" tabIndex={-1} className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-6">
+      <main id="main-content" tabIndex={-1} className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-6 pb-28">
         <Outlet />
       </main>
     </div>

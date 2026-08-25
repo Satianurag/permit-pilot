@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 
 from permit_pilot_core.distribution.engine import DistributionEngine
 from permit_pilot_core.firestore.store import FirestoreStore
-from permit_pilot_core.models import Department, DepartmentReview
+from permit_pilot_core.models import Department, DepartmentReview, ReviewStatus
 from permit_pilot_core.observability.traces import TraceRecorder
 
 
@@ -34,6 +34,7 @@ WORKFLOW_DEPARTMENTS = [
     Department.FIRE,
     Department.UTILITIES,
     Department.LANDMARKS,
+    Department.HOUSING,
     Department.CRITIC,
 ]
 
@@ -61,6 +62,22 @@ class WorkflowRunner:
             return self.init_steps(case_id)
         return steps
 
+    def mark_interrupted(self, case_id: str) -> WorkflowStep | None:
+        steps = self.get_steps(case_id)
+        for step in steps:
+            if step.status == StepStatus.RUNNING:
+                step.status = StepStatus.INTERRUPTED
+                step.detail = "Worker interrupted — resume to continue"
+                step.completed_at = _now()
+                self._store.save_workflow_steps(case_id, steps)
+                reviews = {r.department: r for r in self._store.list_distribution(case_id)}
+                if step.department and step.department in reviews:
+                    review = reviews[step.department]
+                    review.status = ReviewStatus.CHECKING
+                    self._store.save_distribution(case_id, list(reviews.values()))
+                return step
+        return None
+
     async def run_next(self, case_id: str, *, bbl: str, bin_: str, work_type: str) -> WorkflowStep | None:
         steps = self.get_steps(case_id)
         reviews = {r.department: r for r in self._store.list_distribution(case_id)}
@@ -75,6 +92,7 @@ class WorkflowRunner:
             dept = step.department
             if dept is None:
                 continue
+            self._mark_checking(case_id, dept, reviews)
             try:
                 trace = TraceRecorder(self._store, case_id)
                 with trace.span(
@@ -106,6 +124,21 @@ class WorkflowRunner:
                 return step
         return None
 
+    def _mark_checking(
+        self,
+        case_id: str,
+        dept: Department,
+        reviews: dict[Department, DepartmentReview],
+    ) -> None:
+        placeholder = DepartmentReview(
+            department=dept,
+            status=ReviewStatus.CHECKING,
+            summary=f"Running {dept.value} review against NYC Open Data…",
+            updated_at=_now(),
+        )
+        reviews[dept] = placeholder
+        self._store.save_distribution(case_id, list(reviews.values()))
+
     async def run_all(self, case_id: str, *, bbl: str, bin_: str, work_type: str) -> list[WorkflowStep]:
         completed: list[WorkflowStep] = []
         while True:
@@ -130,9 +163,11 @@ class WorkflowRunner:
             return await self._engine.review_utilities(bbl=bbl, bin_=bin_)
         if dept == Department.LANDMARKS:
             return await self._engine.review_landmarks(bbl=bbl, work_type=work_type)
+        if dept == Department.HOUSING:
+            return await self._engine.review_housing(bin_=bin_)
         if dept == Department.CRITIC:
             existing = [r for r in self._store.list_distribution(case_id) if r.department != Department.CRITIC]
-            if len(existing) < 5:
+            if len(existing) < len(WORKFLOW_DEPARTMENTS) - 1:
                 existing = await self._engine.run_departments(bbl=bbl, bin_=bin_, work_type=work_type)
             return await self._engine.review_critic(reviews=existing)
         raise ValueError(f"Unknown department: {dept}")

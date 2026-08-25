@@ -6,7 +6,7 @@ main:
         assign:
           - case_id: ${input.case_id}
           - api_base: ${input.api_base}
-          - remaining: 6
+          - remaining: 7
           - step_response: {}
     - distribution_loop:
         switch:

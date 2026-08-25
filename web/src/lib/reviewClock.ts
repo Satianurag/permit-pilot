@@ -1,4 +1,4 @@
-/** Product review clock: 5 calendar days from task open. Not a statutory DOB SLA. */
+/** Internal review target — not a statutory NYC DOB SLA. */
 export const REVIEW_WINDOW_DAYS = 5;
 
 export type ClockKind = "overdue" | "due_soon" | "on_track";
@@ -21,7 +21,11 @@ export function reviewClock(createdAt: string, now = new Date()): ReviewClock {
   const kind: ClockKind = ms < 0 ? "overdue" : ms < 24 * 60 * 60 * 1000 ? "due_soon" : "on_track";
   const when = due.toLocaleDateString(undefined, { month: "short", day: "numeric" });
   const label =
-    kind === "overdue" ? `Overdue · ${when}` : kind === "due_soon" ? `Due soon · ${when}` : `Due ${when}`;
+    kind === "overdue"
+      ? `Overdue · internal target ${when}`
+      : kind === "due_soon"
+        ? `Due soon · internal target ${when}`
+        : `Internal target ${when}`;
   return { due, kind, label };
 }
 

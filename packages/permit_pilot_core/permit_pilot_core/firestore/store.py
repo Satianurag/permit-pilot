@@ -77,9 +77,10 @@ class FirestoreStore:
             updated_at=_parse_dt(data["updated_at"]),
         )
 
-    def list_cases(self, *, query: str | None = None) -> list[Case]:
+    def list_cases(self, *, query: str | None = None, status: str | None = None) -> list[Case]:
         cases: list[Case] = []
         needle = query.strip().lower() if query else None
+        status_needle = status.strip().lower() if status else None
         for snap in self._cases().stream():
             data = snap.to_dict() or {}
             case = Case(
@@ -94,6 +95,8 @@ class FirestoreStore:
                 created_at=_parse_dt(data["created_at"]),
                 updated_at=_parse_dt(data["updated_at"]),
             )
+            if status_needle and case.status.value != status_needle:
+                continue
             if needle:
                 haystack = " ".join(
                     [
@@ -128,7 +131,14 @@ class FirestoreStore:
         reviews.sort(key=lambda r: r.department.value)
         return reviews
 
-    def create_task(self, case_id: str, title: str, task_type: str) -> Task:
+    def create_task(
+        self,
+        case_id: str,
+        title: str,
+        task_type: str,
+        *,
+        assignee: str | None = None,
+    ) -> Task:
         task_id = str(uuid.uuid4())
         now = _now()
         doc = {
@@ -136,17 +146,34 @@ class FirestoreStore:
             "title": title,
             "task_type": task_type,
             "status": "open",
+            "assignee": assignee,
             "created_at": _serialize_dt(now),
         }
         self._tasks().document(task_id).set(doc)
-        return Task(id=task_id, case_id=case_id, title=title, task_type=task_type, status="open", created_at=now)
+        return Task(
+            id=task_id,
+            case_id=case_id,
+            title=title,
+            task_type=task_type,
+            status="open",
+            assignee=assignee,
+            created_at=now,
+        )
 
-    def list_tasks(self, case_id: str | None = None, *, status: str | None = "open") -> list[Task]:
+    def list_tasks(
+        self,
+        case_id: str | None = None,
+        *,
+        status: str | None = "open",
+        assignee: str | None = None,
+    ) -> list[Task]:
         query: Any = self._tasks()
         if case_id:
             query = query.where(filter=firestore.FieldFilter("case_id", "==", case_id))
         if status:
             query = query.where(filter=firestore.FieldFilter("status", "==", status))
+        if assignee:
+            query = query.where(filter=firestore.FieldFilter("assignee", "==", assignee))
         tasks: list[Task] = []
         for snap in query.stream():
             data = snap.to_dict() or {}
@@ -157,6 +184,7 @@ class FirestoreStore:
                     title=data["title"],
                     task_type=data["task_type"],
                     status=data["status"],
+                    assignee=data.get("assignee"),
                     created_at=_parse_dt(data["created_at"]),
                 )
             )
@@ -200,14 +228,18 @@ class FirestoreStore:
         events.sort(key=lambda e: e.at)
         return events
 
-    def create_claim(self, case_id: str, message: str) -> Claim:
+    def create_claim(self, case_id: str, message: str, *, notify: bool = True) -> Claim:
         claim_id = str(uuid.uuid4())
         now = _now()
+        notification_reference = f"DOB-NOW-{case_id[:8].upper()}-{claim_id[:6].upper()}"
         doc = {
             "case_id": case_id,
             "message": message,
             "status": "open",
             "response_message": None,
+            "notification_channel": "dob_now_handoff" if notify else None,
+            "notification_reference": notification_reference if notify else None,
+            "notified_at": _serialize_dt(now) if notify else None,
             "created_at": _serialize_dt(now),
             "responded_at": None,
         }
@@ -215,7 +247,16 @@ class FirestoreStore:
         self._cases().document(case_id).update(
             {"status": CaseStatus.AWAITING_APPLICANT.value, "updated_at": _serialize_dt(now)}
         )
-        return Claim(id=claim_id, case_id=case_id, message=message, status="open", created_at=now)
+        return Claim(
+            id=claim_id,
+            case_id=case_id,
+            message=message,
+            status="open",
+            notification_channel=doc["notification_channel"],
+            notification_reference=doc["notification_reference"],
+            notified_at=now if notify else None,
+            created_at=now,
+        )
 
     def respond_to_claim(self, case_id: str, claim_id: str, response_message: str) -> Claim | None:
         ref = self._cases().document(case_id).collection("claims").document(claim_id)
@@ -240,6 +281,9 @@ class FirestoreStore:
             message=data["message"],
             status=data["status"],
             response_message=data.get("response_message"),
+            notification_channel=data.get("notification_channel"),
+            notification_reference=data.get("notification_reference"),
+            notified_at=_parse_dt(data["notified_at"]) if data.get("notified_at") else None,
             created_at=_parse_dt(data["created_at"]),
             responded_at=_parse_dt(data["responded_at"]) if data.get("responded_at") else None,
         )
@@ -256,6 +300,9 @@ class FirestoreStore:
                     message=data["message"],
                     status=data["status"],
                     response_message=data.get("response_message"),
+                    notification_channel=data.get("notification_channel"),
+                    notification_reference=data.get("notification_reference"),
+                    notified_at=_parse_dt(data["notified_at"]) if data.get("notified_at") else None,
                     created_at=_parse_dt(data["created_at"]),
                     responded_at=_parse_dt(responded) if responded else None,
                 )
@@ -305,20 +352,75 @@ class FirestoreStore:
         if not snap.exists:
             return None
         data = snap.to_dict() or {}
+        pdf_snap = self._cases().document(case_id).collection("intake").document("plan_pdf").get()
+        has_pdf = pdf_snap.exists
         return IntakeDocument(
             redacted_text=data.get("redacted_text", ""),
             pii_findings=list(data.get("pii_findings") or []),
             stored_at=_parse_dt(data["stored_at"]),
+            filename=data.get("filename"),
+            content_type=data.get("content_type"),
+            has_pdf=has_pdf,
         )
 
-    def save_intake_packet(self, case_id: str, redacted_text: str, pii_findings: list[str]) -> None:
+    def save_intake_packet(
+        self,
+        case_id: str,
+        redacted_text: str,
+        pii_findings: list[str],
+        *,
+        filename: str | None = None,
+        content_type: str | None = None,
+    ) -> None:
         self._cases().document(case_id).collection("intake").document("packet").set(
             {
                 "redacted_text": redacted_text,
                 "pii_findings": pii_findings,
                 "stored_at": _serialize_dt(_now()),
+                "filename": filename,
+                "content_type": content_type,
             }
         )
+
+    def save_intake_pdf(self, case_id: str, *, filename: str, content_type: str, pdf_base64: str) -> None:
+        self._cases().document(case_id).collection("intake").document("plan_pdf").set(
+            {
+                "filename": filename,
+                "content_type": content_type,
+                "pdf_base64": pdf_base64,
+                "stored_at": _serialize_dt(_now()),
+            }
+        )
+
+    def get_intake_pdf(self, case_id: str) -> dict[str, str] | None:
+        snap = self._cases().document(case_id).collection("intake").document("plan_pdf").get()
+        if not snap.exists:
+            return None
+        data = snap.to_dict() or {}
+        if not data.get("pdf_base64"):
+            return None
+        return {
+            "filename": str(data.get("filename") or "plan.pdf"),
+            "content_type": str(data.get("content_type") or "application/pdf"),
+            "pdf_base64": str(data["pdf_base64"]),
+        }
+
+    def save_briefing(self, case_id: str, *, summary: str, model: str, generated_by: str) -> None:
+        now = _now()
+        self._cases().document(case_id).collection("briefing").document("latest").set(
+            {
+                "summary": summary,
+                "model": model,
+                "generated_by": generated_by,
+                "generated_at": _serialize_dt(now),
+            }
+        )
+
+    def get_briefing(self, case_id: str) -> dict[str, Any] | None:
+        snap = self._cases().document(case_id).collection("briefing").document("latest").get()
+        if not snap.exists:
+            return None
+        return snap.to_dict() or None
 
     def save_workflow_steps(self, case_id: str, steps: list[Any]) -> None:
         batch = self._db.batch()
