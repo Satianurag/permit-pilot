@@ -1,14 +1,327 @@
 <!doctype html>
 <html lang="en">
   <head>
+    <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Permit Pilot — NYC clerk orchestration for building permits</title>
+    <meta
+      name="description"
+      content="Task inbox, case file, and live NYC Open Data distribution for NYC plan examiners. Sits above DOB NOW — does not replace it."
+    />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
-    <title>Permit Pilot</title>
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=Lora:ital,wght@0,400;0,500;1,400&display=swap"
+      rel="stylesheet"
+    />
+    <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet" />
+    <link rel="stylesheet" href="/landing/landing.css" />
   </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
+  <body class="pp-landing">
+    <header class="pp-header">
+      <div class="pp-header-inner">
+        <a href="/" class="pp-logo">Permit Pilot</a>
+        <nav class="pp-nav" aria-label="Main">
+          <a href="#departments">Departments</a>
+          <a href="#flow">Workflow</a>
+          <a href="#cases">Map</a>
+          <a href="#faq">FAQ</a>
+          <a href="/login" class="pp-nav-cta">Sign in</a>
+        </nav>
+        <button class="pp-burger" type="button" aria-label="Menu" aria-expanded="false">
+          <span></span><span></span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Hero: live NYC map + product chrome -->
+    <section class="pp-hero">
+      <div class="pp-hero-grid">
+        <div class="pp-hero-copy pp-reveal">
+          <div class="pp-eyebrow">
+            <span class="pp-eyebrow-dot"></span>
+            NYC Department of Buildings · Clerk layer
+          </div>
+          <h1>One queue.<br />One case file.<br />Live city data.</h1>
+          <p class="pp-hero-lead">
+            Permit Pilot orchestrates intake, department distribution, and clerk decisions for NYC building
+            permits — pulling real violation counts and parcel context from NYC Open Data on every run.
+          </p>
+          <div class="pp-hero-actions">
+            <a href="/login" class="pp-btn pp-btn-primary">Open clerk app</a>
+            <a href="#cases" class="pp-btn pp-btn-secondary">Explore reference cases</a>
+          </div>
+        </div>
+
+        <div class="pp-hero-visual pp-reveal">
+          <div class="pp-hero-map-wrap">
+            <div id="pp-hero-map" role="img" aria-label="Map of NYC showing three seeded reference permit case locations"></div>
+          </div>
+          <div class="pp-hero-device">
+            <div class="pp-mock">
+              <div class="pp-mock-bar">
+                <div class="pp-mock-dots"><span></span><span></span><span></span></div>
+                <div class="pp-mock-title">761 Macon Street — Distribution</div>
+              </div>
+              <div class="pp-mock-body">
+                <div class="pp-mock-tabs">
+                  <span>Summary</span>
+                  <span class="is-on">Distribution</span>
+                  <span>Documents</span>
+                  <span>Claims</span>
+                  <span>Audit</span>
+                </div>
+                <div class="pp-dept-row"><span class="pp-dept-name">Zoning</span><span class="pp-dept-meta">PLUTO</span><span class="pp-badge pp-badge--pass">Pass</span></div>
+                <div class="pp-dept-row"><span class="pp-dept-name">Building</span><span class="pp-dept-meta">DOB</span><span class="pp-badge pp-badge--fail">Active violations</span></div>
+                <div class="pp-dept-row"><span class="pp-dept-name">Fire</span><span class="pp-dept-meta">FDNY</span><span class="pp-badge pp-badge--pass">Pass</span></div>
+                <div class="pp-dept-row"><span class="pp-dept-name">Utilities</span><span class="pp-dept-meta">DEP</span><span class="pp-badge pp-badge--info">ECB</span></div>
+                <div class="pp-dept-row"><span class="pp-dept-name">Landmarks</span><span class="pp-dept-meta">LPC</span><span class="pp-badge pp-badge--pass">Pass</span></div>
+                <div class="pp-dept-row"><span class="pp-dept-name">Housing</span><span class="pp-dept-meta">HPD</span><span class="pp-badge pp-badge--pass">Pass</span></div>
+                <div class="pp-dept-row"><span class="pp-dept-name">Critic</span><span class="pp-dept-meta">Review</span><span class="pp-badge pp-badge--pass">Valid</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div class="pp-trust">
+      <div class="pp-trust-inner">
+        <span><strong>NYC Open Data</strong> Socrata</span>
+        <span><strong>9 datasets</strong> keyed on BBL / BIN</span>
+        <span><strong>7 agents</strong> + Critic</span>
+        <span><strong>Vertex</strong> gemini-2.5-flash briefing</span>
+        <span>Does <strong>not</strong> replace DOB NOW</span>
+      </div>
+    </div>
+
+    <!-- Evidence — visual, no code -->
+    <section class="pp-evidence pp-reveal" id="departments">
+      <div class="pp-evidence-inner">
+        <div class="pp-section-head">
+          <h2>Every review links back to NYC Open Data</h2>
+          <p>Department drawers show the source dataset, field, and value returned — the same evidence clerks see in the live app.</p>
+        </div>
+        <div class="pp-evidence-grid">
+          <article class="pp-evidence-card">
+            <span class="pp-evidence-dept">Building</span>
+            <p class="pp-evidence-value">Active DOB violations on BIN</p>
+            <span class="pp-evidence-source">NYC Open Data · DOB violations</span>
+            <span class="pp-badge pp-badge--fail">Fail</span>
+          </article>
+          <article class="pp-evidence-card">
+            <span class="pp-evidence-dept">Zoning</span>
+            <p class="pp-evidence-value">Zoning district &amp; land use from PLUTO</p>
+            <span class="pp-evidence-source">NYC Open Data · PLUTO</span>
+            <span class="pp-badge pp-badge--pass">Pass</span>
+          </article>
+          <article class="pp-evidence-card">
+            <span class="pp-evidence-dept">Utilities</span>
+            <p class="pp-evidence-value">Open DEP ECB records at address</p>
+            <span class="pp-evidence-source">NYC Open Data · DEP ECB</span>
+            <span class="pp-badge pp-badge--info">Review</span>
+          </article>
+          <article class="pp-evidence-card">
+            <span class="pp-evidence-dept">Critic</span>
+            <p class="pp-evidence-value">Citation validated or rejected</p>
+            <span class="pp-evidence-source">Cite-or-reject policy</span>
+            <span class="pp-badge pp-badge--pass">Valid</span>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- Department pipeline -->
+    <section class="pp-pipeline-section">
+      <div class="pp-section-head pp-reveal">
+        <h2>Seven department agents, one parallel distribution run</h2>
+        <p>Zoning through Housing write reviews to the same case file. The Critic validates citations before the clerk decides.</p>
+      </div>
+      <div class="pp-pipeline pp-reveal">
+        <div class="pp-pipeline-item"><strong>Zoning</strong><span class="pp-tag">PLUTO</span><span>Parcel zoning district &amp; land use</span></div>
+        <div class="pp-pipeline-item"><strong>Building</strong><span class="pp-tag">DOB</span><span>Violations, permits &amp; filings</span></div>
+        <div class="pp-pipeline-item"><strong>Fire</strong><span class="pp-tag">FDNY</span><span>Violation records by BIN</span></div>
+        <div class="pp-pipeline-item"><strong>Utilities</strong><span class="pp-tag">DEP</span><span>ECB violations by address</span></div>
+        <div class="pp-pipeline-item"><strong>Landmarks</strong><span class="pp-tag">LPC</span><span>Landmark &amp; historic district</span></div>
+        <div class="pp-pipeline-item"><strong>Housing</strong><span class="pp-tag">HPD</span><span>Open violation classes</span></div>
+        <div class="pp-pipeline-item"><strong>Critic</strong><span class="pp-tag">Review</span><span>Cite-or-reject on claims</span></div>
+      </div>
+    </section>
+
+    <!-- Workflow — compact, no scroll pin -->
+    <section class="pp-flow" id="flow">
+      <div class="pp-flow-inner">
+        <div class="pp-section-head pp-reveal">
+          <h2>From intake to clerk decision</h2>
+          <p>Four steps in the live app — address lookup, parallel distribution, case review, and approval.</p>
+        </div>
+        <div class="pp-flow-grid pp-reveal">
+          <article class="pp-flow-row">
+            <div class="pp-flow-copy">
+              <span class="pp-flow-num">01 — Intake</span>
+              <h3>Address in. BBL from PLUTO.</h3>
+              <p>Clerks create a case from permit search. PLUTO lookup fills borough, BBL, BIN, and owner.</p>
+            </div>
+            <div class="pp-flow-mock">
+              <div class="pp-mock">
+                <div class="pp-mock-bar"><div class="pp-mock-dots"><span></span><span></span><span></span></div><div class="pp-mock-title">Intake — PLUTO lookup</div></div>
+                <div class="pp-mock-body pp-mock-body--white">
+                  <p class="pp-mock-lead">761 Macon Street, Brooklyn</p>
+                  <div class="pp-mock-kv">
+                    <div><span>BBL</span><strong>3014930048</strong></div>
+                    <div><span>BIN</span><strong>3040031</strong></div>
+                  </div>
+                  <p class="pp-mock-ok">✓ Filled from PLUTO · borough locked from BBL digit</p>
+                </div>
+              </div>
+            </div>
+          </article>
+          <article class="pp-flow-row pp-flow-row--flip">
+            <div class="pp-flow-copy">
+              <span class="pp-flow-num">02 — Distribution</span>
+              <h3>Seven agents. Parallel pulls.</h3>
+              <p>Each department queries live NYC Open Data and writes pass, fail, or needs-info to the Distribution tab.</p>
+            </div>
+            <div class="pp-flow-mock">
+              <div class="pp-mock">
+                <div class="pp-mock-bar"><div class="pp-mock-dots"><span></span><span></span><span></span></div><div class="pp-mock-title">Distribution trace</div></div>
+                <div class="pp-mock-body">
+                  <div class="pp-dept-row"><span class="pp-dept-name">Zoning</span><span class="pp-dept-meta">536ms</span><span class="pp-badge pp-badge--pass">Pass</span></div>
+                  <div class="pp-dept-row"><span class="pp-dept-name">Building</span><span class="pp-dept-meta">826ms</span><span class="pp-badge pp-badge--fail">Fail</span></div>
+                  <div class="pp-dept-row"><span class="pp-dept-name">Fire</span><span class="pp-dept-meta">412ms</span><span class="pp-badge pp-badge--pass">Pass</span></div>
+                  <div class="pp-dept-row"><span class="pp-dept-name">Utilities</span><span class="pp-dept-meta">389ms</span><span class="pp-badge pp-badge--pass">Pass</span></div>
+                  <div class="pp-dept-row"><span class="pp-dept-name">Critic</span><span class="pp-dept-meta">48ms</span><span class="pp-badge pp-badge--pass">Cited</span></div>
+                </div>
+              </div>
+            </div>
+          </article>
+          <article class="pp-flow-row">
+            <div class="pp-flow-copy">
+              <span class="pp-flow-num">03 — Review</span>
+              <h3>Task inbox. Five case tabs.</h3>
+              <p>Summary, Distribution, Documents, Claims, and Audit on one dossier. Claims move cases between applicant and clerk queues.</p>
+            </div>
+            <div class="pp-flow-mock">
+              <div class="pp-mock">
+                <div class="pp-mock-bar"><div class="pp-mock-dots"><span></span><span></span><span></span></div><div class="pp-mock-title">My Tasks</div></div>
+                <div class="pp-mock-body">
+                  <div class="pp-mock-filters"><span class="pp-badge pp-badge--open">Open</span><span class="pp-mock-filter">All open work</span></div>
+                  <div class="pp-dept-row pp-dept-row--wide"><span class="pp-dept-name">761 Macon Street — BIN 3040031</span><span class="pp-badge pp-badge--open">Open</span></div>
+                  <div class="pp-dept-row pp-dept-row--wide"><span class="pp-dept-name">43-30 Parsons Blvd — BIN 4117367</span><span class="pp-badge pp-badge--open">Open</span></div>
+                  <div class="pp-dept-row pp-dept-row--wide"><span class="pp-dept-name">112-08 178 Street — BBL only</span><span class="pp-badge pp-badge--open">Open</span></div>
+                </div>
+              </div>
+            </div>
+          </article>
+          <article class="pp-flow-row pp-flow-row--flip">
+            <div class="pp-flow-copy">
+              <span class="pp-flow-num">04 — Decision</span>
+              <h3>Approve or request changes.</h3>
+              <p>Clerk notes append to the audit log. Override on failed departments requires a note of at least 20 characters.</p>
+            </div>
+            <div class="pp-flow-mock">
+              <div class="pp-mock">
+                <div class="pp-mock-bar"><div class="pp-mock-dots"><span></span><span></span><span></span></div><div class="pp-mock-title">Clerk decision</div></div>
+                <div class="pp-mock-body pp-mock-body--white">
+                  <p class="pp-mock-warn">Failed departments require override note (20+ characters)</p>
+                  <p class="pp-mock-note">Clerk note: Reviewed DOB violation counts against ECB records…</p>
+                  <div class="pp-mock-actions">
+                    <span class="pp-mock-approve">Approve dossier</span>
+                    <span class="pp-mock-secondary">Request changes</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- Interactive map + cases -->
+    <section class="pp-cases-map-section" id="cases">
+      <div class="pp-section-head pp-reveal">
+        <h2>Three reference cases on the map</h2>
+        <p>Parcel locations from NYC PLUTO. Click a case to fly the map — same addresses seeded in the deployed app.</p>
+      </div>
+      <div class="pp-cases-explorer pp-reveal">
+        <div id="pp-cases-map" role="application" aria-label="Interactive map of NYC reference permit cases"></div>
+        <aside class="pp-cases-sidebar">
+          <div class="pp-case-card is-active" data-case="parsons" tabindex="0" role="button">
+            <span class="pp-case-card-borough">Queens</span>
+            <p class="pp-case-card-title">43-30 Parsons Boulevard</p>
+            <p class="pp-case-card-work">Construction fence — demolition of 3 story building</p>
+            <div class="pp-case-card-ids"><span>BBL 4051980021</span><span>BIN 4117367</span></div>
+          </div>
+          <div class="pp-case-card" data-case="178" tabindex="0" role="button">
+            <span class="pp-case-card-borough">Queens</span>
+            <p class="pp-case-card-title">112-08 178 Street</p>
+            <p class="pp-case-card-work">Alteration — distribution keyed on BBL when BIN is absent</p>
+            <div class="pp-case-card-ids"><span>BBL 4103000034</span></div>
+          </div>
+          <div class="pp-case-card" data-case="macon" tabindex="0" role="button">
+            <span class="pp-case-card-borough">Brooklyn</span>
+            <p class="pp-case-card-title">761 Macon Street</p>
+            <p class="pp-case-card-work">Plumbing modifications — Critic cite-or-reject demo case</p>
+            <div class="pp-case-card-ids"><span>BBL 3014930048</span><span>BIN 3040031</span></div>
+          </div>
+          <a href="/login" class="pp-btn pp-btn-primary" style="margin-top:0.5rem;justify-content:center">Open in clerk app</a>
+        </aside>
+      </div>
+    </section>
+
+    <section class="pp-faq" id="faq">
+      <h2>Questions and Answers</h2>
+      <div class="pp-faq-list">
+        <div class="pp-faq-item">
+          <button class="pp-faq-q" type="button" aria-expanded="false">Does Permit Pilot replace DOB NOW?<span class="pp-faq-icon"></span></button>
+          <div class="pp-faq-a"><p>No. Applicants continue to use DOB NOW. Clerks use Permit Pilot for the review queue, case file, and department distribution above the examiner workflow.</p></div>
+        </div>
+        <div class="pp-faq-item">
+          <button class="pp-faq-q" type="button" aria-expanded="false">Which NYC Open Data datasets are queried?<span class="pp-faq-icon"></span></button>
+          <div class="pp-faq-a"><p>Nine NYC Open Data sources: PLUTO, permits, filings, DOB violations, DEP ECB, landmarks, FDNY violations, HPD violations, and building footprints — keyed on BBL and BIN.</p></div>
+        </div>
+        <div class="pp-faq-item">
+          <button class="pp-faq-q" type="button" aria-expanded="false">Who signs in?<span class="pp-faq-icon"></span></button>
+          <div class="pp-faq-a"><p>NYC plan examiners and municipal clerks. The demo uses Firestore clerk accounts; production NYC.ID SSO is planned. Sessions end when you close the browser tab.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="pp-cta">
+      <div class="pp-cta-inner pp-reveal">
+        <div>
+          <h2>Start reviewing</h2>
+          <p>Work the task inbox, inspect department distribution, and approve dossiers backed by live NYC Open Data.</p>
+          <a href="/login" class="pp-btn pp-btn-primary">Sign in to clerk app</a>
+        </div>
+        <div class="pp-cta-device">
+          <div class="pp-mock">
+            <div class="pp-mock-bar"><div class="pp-mock-dots"><span></span><span></span><span></span></div><div class="pp-mock-title">Permit Pilot</div></div>
+            <div class="pp-mock-body">
+              <div class="pp-mock-tabs"><span>Summary</span><span class="is-on">Distribution</span><span>Audit</span></div>
+              <div class="pp-dept-row"><span class="pp-dept-name">Building</span><span class="pp-dept-meta">DOB</span><span class="pp-badge pp-badge--fail">Fail</span></div>
+              <div class="pp-dept-row"><span class="pp-dept-name">Zoning</span><span class="pp-dept-meta">PLUTO</span><span class="pp-badge pp-badge--pass">Pass</span></div>
+              <div class="pp-dept-row"><span class="pp-dept-name">Critic</span><span class="pp-dept-meta">Review</span><span class="pp-badge pp-badge--pass">Valid</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <footer class="pp-footer">
+      <div class="pp-footer-inner">
+        <span>© 2026 Permit Pilot · All Things Agentic · Fortified Enterprise Fleet</span>
+        <div>
+          <a href="/tasks">Task inbox</a>
+          <a href="/permits">Permit search</a>
+          <a href="/login">Sign in</a>
+        </div>
+      </div>
+    </footer>
+
+    <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js"></script>
+    <script src="/landing/landing.js"></script>
   </body>
 </html>

@@ -68,6 +68,15 @@ if _static_root and Path(_static_root).is_dir():
     if assets_dir.is_dir():
         app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
 
+    _SPA_ENTRY = Path(_static_root) / "app.html"
+    _LANDING_ENTRY = Path(_static_root) / "index.html"
+    _SPA_PREFIXES = ("login", "tasks", "permits", "cases")
+
+    def _spa_entry_for(spa_path: str) -> Path:
+        if spa_path in _SPA_PREFIXES or spa_path.startswith("cases/"):
+            return _SPA_ENTRY if _SPA_ENTRY.is_file() else _LANDING_ENTRY
+        return _LANDING_ENTRY
+
     @app.get("/{spa_path:path}")
     def spa_fallback(spa_path: str):
         if spa_path.startswith("api/") or spa_path == "api":
@@ -75,4 +84,4 @@ if _static_root and Path(_static_root).is_dir():
         candidate = Path(_static_root) / spa_path
         if spa_path and candidate.is_file():
             return FileResponse(candidate)
-        return FileResponse(Path(_static_root) / "index.html")
+        return FileResponse(_spa_entry_for(spa_path))
