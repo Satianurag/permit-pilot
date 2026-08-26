@@ -10,7 +10,7 @@
 }
 
 html {
-  scroll-padding-bottom: 9rem;
+  scroll-padding-bottom: var(--pp-footer-height, 9rem);
 }
 
 body {
@@ -47,6 +47,7 @@ body {
 
 .pp-dialog {
   width: min(32rem, calc(100% - 2rem));
+  margin: auto;
   border: 1px solid var(--color-pp-border);
   border-radius: 0.5rem;
   padding: 1.5rem;

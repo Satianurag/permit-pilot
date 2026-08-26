@@ -13,7 +13,6 @@ class ReviewStatus(StrEnum):
 
 
 class CaseStatus(StrEnum):
-    INTAKE = "intake"
     IN_REVIEW = "in_review"
     AWAITING_CLERK = "awaiting_clerk"
     AWAITING_APPLICANT = "awaiting_applicant"
@@ -76,6 +75,15 @@ class CreateCaseRequest(BaseModel):
     borough: str | None = None
 
 
+class CaseUpdateRequest(BaseModel):
+    address: str | None = None
+    bbl: str | None = None
+    bin: str | None = None
+    work_type: str | None = None
+    owner: str | None = None
+    borough: str | None = None
+
+
 class IntakeRequest(BaseModel):
     address: str
     bbl: str
@@ -110,6 +118,7 @@ class Claim(BaseModel):
     notification_channel: str | None = None
     notification_reference: str | None = None
     notified_at: datetime | None = None
+    manual_dob_now_sent: bool = False
     created_at: datetime
     responded_at: datetime | None = None
 

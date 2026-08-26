@@ -62,7 +62,7 @@ export default function DossiersPage() {
   return (
     <div className="space-y-4">
       <div>
-        <h2 className="text-2xl font-semibold text-pp-navy">Permit search</h2>
+        <h1 className="text-2xl font-semibold text-pp-navy">Permit search</h1>
         <p className="text-sm text-slate-600">
           Find a dossier by address, BBL, BIN, owner, or status. Search waits 300ms after you stop typing.
         </p>
@@ -102,7 +102,7 @@ export default function DossiersPage() {
       ) : cases.length === 0 ? (
         <EmptyState title="No permits match your search" description="Try a different address, BBL, BIN, or status." />
       ) : (
-        <div className="table-scroll rounded-lg border border-pp-border bg-white" tabIndex={0}>
+        <div className="table-scroll rounded-lg border border-pp-border bg-white">
           <table className="min-w-full text-sm">
             <caption className="sr-only">Matching permit dossiers</caption>
             <thead className="bg-slate-50 text-left text-slate-600">

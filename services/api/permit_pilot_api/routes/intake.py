@@ -1,19 +1,30 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from pydantic import BaseModel
 
 from permit_pilot_core.distribution.engine import DistributionEngine
 from permit_pilot_core.firestore.store import FirestoreStore
 from permit_pilot_core.models import CreateCaseRequest, IntakeRequest
-from permit_pilot_core.observability.traces import TraceRecorder
-from permit_pilot_core.orchestration.vertex import orchestrate_case_summary
 from permit_pilot_core.security.pii import redact_pii
 from permit_pilot_core.socrata.client import SocrataClient
 from permit_pilot_core.workflow.runner import WorkflowRunner
 from permit_pilot_api.auth import ClerkUser, clerk_actor, get_current_user
+from permit_pilot_api.config import gcp_project_id
 from permit_pilot_api.deps import engine_from_request, store_from_request
+from permit_pilot_api.workflow_jobs import run_distribution_background
 
 router = APIRouter(prefix="/cases", tags=["intake"], dependencies=[Depends(get_current_user)])
+
+
+class PacketPreviewRequest(BaseModel):
+    packet_text: str
+
+
+@router.post("/intake/preview-redaction")
+def preview_packet_redaction(body: PacketPreviewRequest):
+    redacted, findings = redact_pii(body.packet_text)
+    return {"redacted_text": redacted, "findings": findings}
 
 
 async def _resolve_bin(payload: CreateCaseRequest, socrata: SocrataClient) -> CreateCaseRequest:
@@ -39,6 +50,7 @@ async def _resolve_bin(payload: CreateCaseRequest, socrata: SocrataClient) -> Cr
 async def intake_case(
     payload: IntakeRequest,
     request: Request,
+    background_tasks: BackgroundTasks,
     current_user: Annotated[ClerkUser, Depends(get_current_user)],
 ):
     store: FirestoreStore = store_from_request(request)
@@ -91,7 +103,15 @@ async def intake_case(
         )
 
     runner = WorkflowRunner(store, engine)
-    await runner.run_all(case.id, bbl=case.bbl, bin_=case.bin, work_type=case.work_type)
+    runner.init_steps(case.id)
+    background_tasks.add_task(
+        run_distribution_background,
+        case_id=case.id,
+        bbl=case.bbl,
+        bin_=case.bin,
+        work_type=case.work_type,
+        project_id=gcp_project_id(),
+    )
     store.create_task(
         case.id,
         title=f"Review distribution — BIN {case.bin or case.bbl}",

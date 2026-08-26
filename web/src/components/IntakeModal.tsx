@@ -55,6 +55,8 @@ export default function IntakeModal({ open, onClose, onCreated }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [lookupLoading, setLookupLoading] = useState(false);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [redactionPreview, setRedactionPreview] = useState<{ text: string; findings: string[] } | null>(null);
   const boroughLocked = Boolean(boroughFromBbl(form.bbl));
 
   useEffect(() => {
@@ -64,6 +66,8 @@ export default function IntakeModal({ open, onClose, onCreated }: Props) {
     setError(null);
     setLoading(false);
     setLookupLoading(false);
+    setPreviewLoading(false);
+    setRedactionPreview(null);
     const timer = window.setTimeout(() => firstFieldRef.current?.focus(), 0);
     return () => window.clearTimeout(timer);
   }, [open]);
@@ -125,6 +129,24 @@ export default function IntakeModal({ open, onClose, onCreated }: Props) {
       setError(null);
     } catch (err) {
       setError(errorMessage(err));
+    }
+  };
+
+  const previewRedaction = async () => {
+    const packet = form.packet_text ?? "";
+    if (!packet.trim()) {
+      setError("Enter packet text to preview redaction.");
+      return;
+    }
+    setPreviewLoading(true);
+    setError(null);
+    try {
+      const result = await api.previewRedaction(packet);
+      setRedactionPreview({ text: result.redacted_text, findings: result.findings });
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setPreviewLoading(false);
     }
   };
 
@@ -291,8 +313,30 @@ export default function IntakeModal({ open, onClose, onCreated }: Props) {
             className="mt-1 w-full border border-pp-border rounded-md px-3 py-2 text-sm min-h-24"
             placeholder="SSN, email, and phone will be redacted automatically."
             value={form.packet_text}
-            onChange={(e) => setForm({ ...form, packet_text: e.target.value })}
+            onChange={(e) => {
+              setForm({ ...form, packet_text: e.target.value });
+              setRedactionPreview(null);
+            }}
           />
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              disabled={previewLoading || !(form.packet_text ?? "").trim()}
+              onClick={() => void previewRedaction()}
+              className="text-sm px-3 py-1.5 rounded-md border border-pp-border disabled:opacity-50"
+            >
+              {previewLoading ? "Previewing…" : "Preview redaction"}
+            </button>
+          </div>
+          {redactionPreview && (
+            <div className="mt-2 rounded-md border border-pp-border bg-slate-50 p-3 text-sm space-y-2">
+              <p className="font-medium text-slate-700">Redacted preview (not stored yet)</p>
+              <p className="text-slate-600 whitespace-pre-wrap">{redactionPreview.text}</p>
+              <p className="text-xs text-slate-500">
+                Findings: {redactionPreview.findings.length ? redactionPreview.findings.join(", ") : "none"}
+              </p>
+            </div>
+          )}
         </div>
         <div>
           <label htmlFor="intake-plan" className="block text-sm font-medium text-slate-700">

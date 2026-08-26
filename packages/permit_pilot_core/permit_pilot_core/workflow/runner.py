@@ -76,10 +76,46 @@ class WorkflowRunner:
                     review.status = ReviewStatus.CHECKING
                     self._store.save_distribution(case_id, list(reviews.values()))
                 return step
+
+        reviews = self._store.list_distribution(case_id)
+        checking = next((r for r in reviews if r.status == ReviewStatus.CHECKING), None)
+        if checking:
+            for step in steps:
+                if step.department == checking.department:
+                    step.status = StepStatus.INTERRUPTED
+                    step.detail = "Worker interrupted — resume to continue"
+                    step.completed_at = _now()
+                    self._store.save_workflow_steps(case_id, steps)
+                    return step
+
+        for step in steps:
+            if step.status == StepStatus.PENDING:
+                step.status = StepStatus.INTERRUPTED
+                step.detail = "Worker interrupted — resume to continue"
+                step.completed_at = _now()
+                self._store.save_workflow_steps(case_id, steps)
+                if step.department:
+                    reviews_map = {r.department: r for r in reviews}
+                    if step.department in reviews_map:
+                        reviews_map[step.department].status = ReviewStatus.CHECKING
+                        self._store.save_distribution(case_id, list(reviews_map.values()))
+                return self.get_steps(case_id)[steps.index(step)]
         return None
+
+    def _reset_terminal_steps(self, case_id: str) -> None:
+        steps = self.get_steps(case_id)
+        for step in steps:
+            if step.status in {StepStatus.COMPLETED, StepStatus.FAILED}:
+                step.status = StepStatus.PENDING
+                step.started_at = None
+                step.completed_at = None
+                step.detail = ""
+        self._store.save_workflow_steps(case_id, steps)
 
     async def run_next(self, case_id: str, *, bbl: str, bin_: str, work_type: str) -> WorkflowStep | None:
         steps = self.get_steps(case_id)
+        if any(step.status == StepStatus.INTERRUPTED for step in steps):
+            return None
         reviews = {r.department: r for r in self._store.list_distribution(case_id)}
         for step in steps:
             if step.status in {StepStatus.COMPLETED, StepStatus.FAILED}:
@@ -105,10 +141,14 @@ class WorkflowRunner:
                     )
                 reviews[dept] = review
                 self._store.save_distribution(case_id, list(reviews.values()))
+                latest_steps = self.get_steps(case_id)
+                latest = next((s for s in latest_steps if s.department == dept), step)
+                if latest.status == StepStatus.INTERRUPTED:
+                    return latest
                 step.status = StepStatus.COMPLETED
                 step.completed_at = _now()
                 step.detail = review.summary
-                self._store.save_workflow_steps(case_id, steps)
+                self._store.save_workflow_steps(case_id, latest_steps)
                 self._store.append_audit(
                     case_id,
                     actor=dept.value,
@@ -139,9 +179,33 @@ class WorkflowRunner:
         reviews[dept] = placeholder
         self._store.save_distribution(case_id, list(reviews.values()))
 
-    async def run_all(self, case_id: str, *, bbl: str, bin_: str, work_type: str) -> list[WorkflowStep]:
+    async def resume_next(self, case_id: str, *, bbl: str, bin_: str, work_type: str) -> WorkflowStep | None:
+        """Resume after an interrupted step — clears interrupted status and runs one department."""
+        steps = self.get_steps(case_id)
+        for step in steps:
+            if step.status == StepStatus.INTERRUPTED:
+                step.status = StepStatus.PENDING
+                step.detail = ""
+                step.completed_at = None
+                self._store.save_workflow_steps(case_id, steps)
+                break
+        return await self.run_next(case_id, bbl=bbl, bin_=bin_, work_type=work_type)
+
+    async def run_all(
+        self,
+        case_id: str,
+        *,
+        bbl: str,
+        bin_: str,
+        work_type: str,
+        force: bool = False,
+    ) -> list[WorkflowStep]:
+        if force:
+            self._reset_terminal_steps(case_id)
         completed: list[WorkflowStep] = []
         while True:
+            if any(s.status == StepStatus.INTERRUPTED for s in self.get_steps(case_id)):
+                break
             step = await self.run_next(case_id, bbl=bbl, bin_=bin_, work_type=work_type)
             if step is None:
                 break
@@ -149,6 +213,26 @@ class WorkflowRunner:
             if step.status == StepStatus.FAILED:
                 break
         return completed
+
+    async def refresh_departments(
+        self,
+        case_id: str,
+        departments: list[Department],
+        *,
+        bbl: str,
+        bin_: str,
+        work_type: str,
+    ) -> list[DepartmentReview]:
+        """Re-run selected department reviews without advancing the full workflow."""
+        reviews = {r.department: r for r in self._store.list_distribution(case_id)}
+        for dept in departments:
+            self._mark_checking(case_id, dept, reviews)
+            review = await self._run_department(
+                dept, case_id=case_id, bbl=bbl, bin_=bin_, work_type=work_type
+            )
+            reviews[dept] = review
+        self._store.save_distribution(case_id, list(reviews.values()))
+        return list(reviews.values())
 
     async def _run_department(
         self, dept: Department, *, case_id: str, bbl: str, bin_: str, work_type: str

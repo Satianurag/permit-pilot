@@ -1,7 +1,10 @@
+import os
+
 from permit_pilot_core.distribution.engine import DistributionEngine
 from permit_pilot_core.firestore.store import FirestoreStore
-from permit_pilot_core.models import CreateCaseRequest
+from permit_pilot_core.models import Citation, CreateCaseRequest, Department, ReviewStatus
 from permit_pilot_core.socrata.client import SocrataClient
+from permit_pilot_core.workflow.runner import StepStatus, WorkflowRunner
 
 # Real NYC Open Data reference cases (BBL/BIN from live Socrata rows — not synthetic).
 REAL_NYC_CASES: list[CreateCaseRequest] = [
@@ -31,6 +34,12 @@ REAL_NYC_CASES: list[CreateCaseRequest] = [
     ),
 ]
 
+_CRITIC_DEMO_CITATION = Citation(
+    code="DEP Rules",
+    excerpt="Mis-cited ordinance for demo — DEP code cited on a building review.",
+    source_url="https://github.com/BetaNYC/nyc-charter-laws-rules",
+)
+
 
 async def _resolve_bin(payload: CreateCaseRequest, socrata: SocrataClient) -> CreateCaseRequest:
     if payload.bin:
@@ -45,6 +54,7 @@ async def _resolve_bin(payload: CreateCaseRequest, socrata: SocrataClient) -> Cr
 async def ensure_seeded(store: FirestoreStore, engine: DistributionEngine) -> None:
     socrata = SocrataClient()
     existing = {c.bbl: c for c in store.list_cases()}
+    bootstrap_clerk = os.environ.get("CLERK_BOOTSTRAP_USERNAME", "maria").strip()
 
     for payload in REAL_NYC_CASES:
         resolved = await _resolve_bin(payload, socrata)
@@ -59,12 +69,35 @@ async def ensure_seeded(store: FirestoreStore, engine: DistributionEngine) -> No
                 detail=f"Case created for BBL {case.bbl} with live NYC Open Data keys.",
             )
 
-        reviews = await engine.run_all(
-            bbl=case.bbl,
-            bin_=case.bin,
-            work_type=case.work_type,
-        )
-        store.save_distribution(case.id, reviews)
+        runner = WorkflowRunner(store, engine)
+        await runner.run_all(case.id, bbl=case.bbl, bin_=case.bin, work_type=case.work_type)
+
+        if case.bbl == "3014930048":
+            reviews = store.list_distribution(case.id)
+            patched = []
+            for review in reviews:
+                if review.department == Department.BUILDING:
+                    patched.append(
+                        review.model_copy(
+                            update={
+                                "status": ReviewStatus.FAIL,
+                                "summary": "Seeded demo: building review with mis-cited ordinance for Critic.",
+                                "citations": [_CRITIC_DEMO_CITATION],
+                            }
+                        )
+                    )
+                elif review.department != Department.CRITIC:
+                    patched.append(review)
+            critic = await engine.review_critic(reviews=patched)
+            store.save_distribution(case.id, patched + [critic])
+            steps = runner.get_steps(case.id)
+            for step in steps:
+                if step.department == Department.BUILDING:
+                    step.detail = "Seeded demo: mis-cited ordinance (Critic demo)"
+                if step.department == Department.CRITIC:
+                    step.detail = critic.summary
+                    step.status = StepStatus.COMPLETED if critic.status != ReviewStatus.FAIL else StepStatus.FAILED
+            store.save_workflow_steps(case.id, steps)
 
         open_tasks = store.list_tasks(case.id, status="open")
         if not open_tasks:
@@ -72,4 +105,9 @@ async def ensure_seeded(store: FirestoreStore, engine: DistributionEngine) -> No
                 case.id,
                 title=f"Review distribution — BIN {case.bin or case.bbl}",
                 task_type="distribution_review",
+                assignee=bootstrap_clerk,
             )
+        else:
+            for task in open_tasks:
+                if not task.assignee:
+                    store.assign_task(task.id, bootstrap_clerk)

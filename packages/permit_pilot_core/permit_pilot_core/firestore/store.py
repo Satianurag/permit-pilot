@@ -77,7 +77,29 @@ class FirestoreStore:
             updated_at=_parse_dt(data["updated_at"]),
         )
 
-    def list_cases(self, *, query: str | None = None, status: str | None = None) -> list[Case]:
+    def update_case(self, case_id: str, fields: dict[str, Any]) -> Case | None:
+        ref = self._cases().document(case_id)
+        if not ref.get().exists:
+            return None
+        allowed = {"address", "bbl", "bin", "work_type", "owner", "borough"}
+        updates: dict[str, Any] = {}
+        for key, value in fields.items():
+            if key in allowed and value is not None and str(value).strip():
+                updates[key] = str(value).strip()
+        if not updates:
+            return self.get_case(case_id)
+        updates["updated_at"] = _serialize_dt(_now())
+        ref.update(updates)
+        return self.get_case(case_id)
+
+    def list_cases(
+        self,
+        *,
+        query: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[Case]:
         cases: list[Case] = []
         needle = query.strip().lower() if query else None
         status_needle = status.strip().lower() if status else None
@@ -113,6 +135,10 @@ class FirestoreStore:
                     continue
             cases.append(case)
         cases.sort(key=lambda c: c.updated_at, reverse=True)
+        if offset:
+            cases = cases[offset:]
+        if limit > 0:
+            cases = cases[:limit]
         return cases
 
     def save_distribution(self, case_id: str, reviews: list[DepartmentReview]) -> None:
@@ -160,19 +186,44 @@ class FirestoreStore:
             created_at=now,
         )
 
+    def get_task(self, task_id: str) -> Task | None:
+        snap = self._tasks().document(task_id).get()
+        if not snap.exists:
+            return None
+        data = snap.to_dict() or {}
+        return Task(
+            id=snap.id,
+            case_id=data["case_id"],
+            title=data["title"],
+            task_type=data["task_type"],
+            status=data["status"],
+            assignee=data.get("assignee"),
+            created_at=_parse_dt(data["created_at"]),
+        )
+
+    def assign_task(self, task_id: str, assignee: str) -> Task | None:
+        ref = self._tasks().document(task_id)
+        if not ref.get().exists:
+            return None
+        ref.update({"assignee": assignee})
+        return self.get_task(task_id)
+
     def list_tasks(
         self,
         case_id: str | None = None,
         *,
         status: str | None = "open",
         assignee: str | None = None,
+        unassigned_only: bool = False,
+        limit: int = 100,
+        offset: int = 0,
     ) -> list[Task]:
         query: Any = self._tasks()
         if case_id:
             query = query.where(filter=firestore.FieldFilter("case_id", "==", case_id))
         if status:
             query = query.where(filter=firestore.FieldFilter("status", "==", status))
-        if assignee:
+        if assignee and not unassigned_only:
             query = query.where(filter=firestore.FieldFilter("assignee", "==", assignee))
         tasks: list[Task] = []
         for snap in query.stream():
@@ -188,7 +239,13 @@ class FirestoreStore:
                     created_at=_parse_dt(data["created_at"]),
                 )
             )
+        if unassigned_only:
+            tasks = [task for task in tasks if not task.assignee]
         tasks.sort(key=lambda t: t.created_at, reverse=True)
+        if offset:
+            tasks = tasks[offset:]
+        if limit > 0:
+            tasks = tasks[:limit]
         return tasks
 
     def complete_open_tasks_for_case(self, case_id: str) -> int:
@@ -237,9 +294,10 @@ class FirestoreStore:
             "message": message,
             "status": "open",
             "response_message": None,
-            "notification_channel": "dob_now_handoff" if notify else None,
+            "notification_channel": "dob_now_manual" if notify else None,
             "notification_reference": notification_reference if notify else None,
-            "notified_at": _serialize_dt(now) if notify else None,
+            "notified_at": None,
+            "manual_dob_now_sent": False,
             "created_at": _serialize_dt(now),
             "responded_at": None,
         }
@@ -254,7 +312,8 @@ class FirestoreStore:
             status="open",
             notification_channel=doc["notification_channel"],
             notification_reference=doc["notification_reference"],
-            notified_at=now if notify else None,
+            notified_at=None,
+            manual_dob_now_sent=False,
             created_at=now,
         )
 
@@ -284,6 +343,29 @@ class FirestoreStore:
             notification_channel=data.get("notification_channel"),
             notification_reference=data.get("notification_reference"),
             notified_at=_parse_dt(data["notified_at"]) if data.get("notified_at") else None,
+            manual_dob_now_sent=bool(data.get("manual_dob_now_sent")),
+            created_at=_parse_dt(data["created_at"]),
+            responded_at=_parse_dt(data["responded_at"]) if data.get("responded_at") else None,
+        )
+
+    def mark_claim_dob_now_sent(self, case_id: str, claim_id: str) -> Claim | None:
+        ref = self._cases().document(case_id).collection("claims").document(claim_id)
+        snap = ref.get()
+        if not snap.exists:
+            return None
+        now = _now()
+        ref.update({"manual_dob_now_sent": True, "notified_at": _serialize_dt(now)})
+        data = ref.get().to_dict() or {}
+        return Claim(
+            id=claim_id,
+            case_id=case_id,
+            message=data["message"],
+            status=data["status"],
+            response_message=data.get("response_message"),
+            notification_channel=data.get("notification_channel"),
+            notification_reference=data.get("notification_reference"),
+            notified_at=_parse_dt(data["notified_at"]) if data.get("notified_at") else None,
+            manual_dob_now_sent=bool(data.get("manual_dob_now_sent")),
             created_at=_parse_dt(data["created_at"]),
             responded_at=_parse_dt(data["responded_at"]) if data.get("responded_at") else None,
         )
@@ -303,6 +385,7 @@ class FirestoreStore:
                     notification_channel=data.get("notification_channel"),
                     notification_reference=data.get("notification_reference"),
                     notified_at=_parse_dt(data["notified_at"]) if data.get("notified_at") else None,
+                    manual_dob_now_sent=bool(data.get("manual_dob_now_sent")),
                     created_at=_parse_dt(data["created_at"]),
                     responded_at=_parse_dt(responded) if responded else None,
                 )
@@ -421,6 +504,37 @@ class FirestoreStore:
         if not snap.exists:
             return None
         return snap.to_dict() or None
+
+    def get_context_cache(self, case_id: str, *, ttl_seconds: int = 3600) -> dict[str, Any] | None:
+        snap = self._cases().document(case_id).collection("meta").document("context_cache").get()
+        if not snap.exists:
+            return None
+        data = snap.to_dict() or {}
+        cached_at = data.get("cached_at")
+        if not cached_at:
+            return None
+        age = (_now() - _parse_dt(cached_at)).total_seconds()
+        if age > ttl_seconds:
+            return None
+        return {
+            "related_permits": data.get("related_permits") or [],
+            "parcel": data.get("parcel"),
+        }
+
+    def save_context_cache(
+        self,
+        case_id: str,
+        *,
+        related_permits: list[dict[str, Any]],
+        parcel: dict[str, Any] | None,
+    ) -> None:
+        self._cases().document(case_id).collection("meta").document("context_cache").set(
+            {
+                "related_permits": related_permits,
+                "parcel": parcel,
+                "cached_at": _serialize_dt(_now()),
+            }
+        )
 
     def save_workflow_steps(self, case_id: str, steps: list[Any]) -> None:
         batch = self._db.batch()

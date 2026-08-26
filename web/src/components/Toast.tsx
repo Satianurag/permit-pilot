@@ -6,10 +6,11 @@ export interface ToastMessage {
   id: number;
   text: string;
   tone: ToastTone;
+  sticky?: boolean;
 }
 
 interface ToastContextValue {
-  push: (text: string, tone?: ToastTone) => void;
+  push: (text: string, tone?: ToastTone, options?: { sticky?: boolean }) => void;
 }
 
 const ToastContext = createContext<ToastContextValue | null>(null);
@@ -17,12 +18,19 @@ const ToastContext = createContext<ToastContextValue | null>(null);
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
 
-  const push = useCallback((text: string, tone: ToastTone = "info") => {
+  const push = useCallback((text: string, tone: ToastTone = "info", options?: { sticky?: boolean }) => {
     const id = Date.now() + Math.random();
-    setToasts((current) => [...current, { id, text, tone }]);
-    window.setTimeout(() => {
-      setToasts((current) => current.filter((toast) => toast.id !== id));
-    }, 4000);
+    const sticky = options?.sticky ?? false;
+    setToasts((current) => [...current, { id, text, tone, sticky }]);
+    if (!sticky) {
+      window.setTimeout(() => {
+        setToasts((current) => current.filter((toast) => toast.id !== id));
+      }, 6000);
+    }
+  }, []);
+
+  const dismiss = useCallback((id: number) => {
+    setToasts((current) => current.filter((toast) => toast.id !== id));
   }, []);
 
   const value = useMemo(() => ({ push }), [push]);
@@ -46,7 +54,16 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             role="status"
             className={`rounded-md border px-3 py-2 text-sm shadow-sm pointer-events-auto ${toneClass[toast.tone]}`}
           >
-            {toast.text}
+            <span>{toast.text}</span>
+            {toast.sticky && (
+              <button
+                type="button"
+                className="ml-2 text-xs underline"
+                onClick={() => dismiss(toast.id)}
+              >
+                Dismiss
+              </button>
+            )}
           </p>
         ))}
       </div>

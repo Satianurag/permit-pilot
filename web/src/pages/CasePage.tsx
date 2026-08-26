@@ -1,4 +1,4 @@
-import { KeyboardEvent, useCallback, useEffect, useId, useState } from "react";
+import { KeyboardEvent, useCallback, useEffect, useId, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import ConfirmDialog from "../components/ConfirmDialog";
 import EmptyState from "../components/EmptyState";
@@ -7,15 +7,18 @@ import Skeleton from "../components/Skeleton";
 import { StatusBadge } from "../components/StatusBadge";
 import TraceReplay from "../components/TraceReplay";
 import { useToast } from "../components/Toast";
-import { api, Case, CaseBundle, Claim, ConditionTemplate, DepartmentReview, Task } from "../lib/api";
-import { getStoredUser, isAdmin } from "../lib/auth";
+import { api, Case, CaseBundle, Claim, ConditionTemplate, DepartmentReview, ParcelContext, RelatedPermit, Task } from "../lib/api";
+import { groupAuditEvents, sortDepartmentReviews } from "../lib/auditFormat";
 import { readBriefing, writeBriefing } from "../lib/briefingCache";
-import { errorMessage } from "../lib/errors";
+import { errorMessage, isNotFoundError } from "../lib/errors";
 import { formatStatus } from "../lib/formatStatus";
+import { readNoteDraft, writeNoteDraft } from "../lib/noteDraftCache";
+import { reviewClock } from "../lib/reviewClock";
 
 const TABS = ["summary", "distribution", "documents", "claims", "audit"] as const;
 type Tab = (typeof TABS)[number];
 const TERMINAL = new Set(["approved", "changes_requested"]);
+const DISTRIBUTION_STALE_MS = 24 * 60 * 60 * 1000;
 
 function isTab(value: string | null): value is Tab {
   return TABS.includes(value as Tab);
@@ -31,13 +34,17 @@ export default function CasePage() {
   const tab: Tab = isTab(params.get("tab")) ? (params.get("tab") as Tab) : "summary";
   const from = params.get("from") === "search" ? "search" : "tasks";
   const [bundle, setBundle] = useState<CaseBundle | null>(null);
+  const [context, setContext] = useState<{ related_permits: RelatedPermit[]; parcel: ParcelContext | null } | null>(null);
+  const [contextLoading, setContextLoading] = useState(false);
   const [selected, setSelected] = useState<DepartmentReview | null>(null);
   const [claimText, setClaimText] = useState("");
   const [responseText, setResponseText] = useState("");
   const [respondingClaimId, setRespondingClaimId] = useState<string | null>(null);
-  const [note, setNote] = useState("");
+  const [note, setNote] = useState(() => readNoteDraft(caseId) ?? "");
   const [briefing, setBriefing] = useState<string | null>(() => readBriefing(caseId));
   const [error, setError] = useState<string | null>(null);
+  const [bundleError, setBundleError] = useState<string | null>(null);
+  const [caseStub, setCaseStub] = useState<Case | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [approveOpen, setApproveOpen] = useState(false);
@@ -45,12 +52,18 @@ export default function CasePage() {
   const [conditions, setConditions] = useState<ConditionTemplate[]>([]);
   const [planUrl, setPlanUrl] = useState<string | null>(null);
   const [nextTask, setNextTask] = useState<Task | null>(null);
-  const admin = isAdmin(getStoredUser());
+  const [editOpen, setEditOpen] = useState(false);
+  const [editForm, setEditForm] = useState({ address: "", bbl: "", bin: "", work_type: "", owner: "", borough: "" });
+  const [decisionSheetOpen, setDecisionSheetOpen] = useState(false);
+  const [expandedAudit, setExpandedAudit] = useState<Record<string, boolean>>({});
+  const [showAllPermits, setShowAllPermits] = useState(false);
+  const footerRef = useRef<HTMLElement>(null);
+  const mobileFooterRef = useRef<HTMLDivElement>(null);
 
   const setTab = (name: Tab) => {
     const next = new URLSearchParams(params);
     next.set("tab", name);
-    setParams(next, { replace: true });
+    setParams(next);
   };
 
   const onTabKey = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -66,21 +79,33 @@ export default function CasePage() {
     document.getElementById(`${tabsId}-${TABS[next]}`)?.focus();
   };
 
-  const requireNote = () => {
-    if (note.trim()) return true;
-    setError("Clerk note is required for the audit trail");
-    document.getElementById("clerk-note")?.focus();
-    return false;
+  const requireNote = (override = false) => {
+    if (!note.trim()) {
+      setError("Clerk note is required for the audit trail");
+      document.getElementById("clerk-note")?.focus();
+      return false;
+    }
+    if (override && note.trim().length < 20) {
+      setError("Override decisions require a clerk note of at least 20 characters explaining why.");
+      document.getElementById("clerk-note")?.focus();
+      return false;
+    }
+    return true;
+  };
+
+  const onNoteChange = (value: string) => {
+    setNote(value);
+    writeNoteDraft(caseId, value);
   };
 
   const load = useCallback(
     (silent = false) => {
       if (!silent) setLoading(true);
-      setError(null);
+      setBundleError(null);
       api
         .getCaseBundle(caseId)
         .then(setBundle)
-        .catch((err: Error) => setError(err.message))
+        .catch((err: Error) => setBundleError(err.message))
         .finally(() => setLoading(false));
     },
     [caseId],
@@ -89,14 +114,38 @@ export default function CasePage() {
   useEffect(() => load(), [load]);
 
   useEffect(() => {
+    if (bundle || !bundleError || isNotFoundError(bundleError)) {
+      setCaseStub(null);
+      return;
+    }
+    api
+      .getCase(caseId)
+      .then(setCaseStub)
+      .catch(() => setCaseStub(null));
+  }, [bundle, bundleError, caseId]);
+
+  useEffect(() => {
     api.listConditions().then(setConditions).catch(() => setConditions([]));
   }, []);
 
   useEffect(() => {
     setBriefing(readBriefing(caseId));
+    setNote(readNoteDraft(caseId) ?? "");
     setNextTask(null);
     setPlanUrl(null);
+    setContext(null);
+    setDecisionSheetOpen(false);
   }, [caseId]);
+
+  useEffect(() => {
+    if (tab !== "summary" || context || contextLoading) return;
+    setContextLoading(true);
+    api
+      .getCaseContext(caseId)
+      .then(setContext)
+      .catch(() => setContext({ related_permits: [], parcel: null }))
+      .finally(() => setContextLoading(false));
+  }, [tab, caseId, context, contextLoading]);
 
   useEffect(() => {
     if (bundle?.briefing?.summary) {
@@ -104,6 +153,9 @@ export default function CasePage() {
       writeBriefing(caseId, bundle.briefing.summary);
     }
   }, [bundle?.briefing, caseId]);
+
+  const storedBriefing = bundle?.briefing;
+  const hasStoredBriefing = Boolean(storedBriefing?.summary || briefing);
 
   useEffect(() => {
     if (!bundle?.document?.has_pdf) {
@@ -132,29 +184,125 @@ export default function CasePage() {
 
   const caseData: Case | null = bundle?.case ?? null;
   const canDecide = Boolean(caseData && !TERMINAL.has(caseData.status));
+  const mutating = busy !== null;
+  const showDecisionFooter = canDecide && (tab === "distribution" || tab === "summary");
   const failed = bundle?.distribution.filter((row) => row.status === "fail" && row.department !== "critic") ?? [];
   const needsInfo =
     bundle?.distribution.filter((row) => row.status === "needs_info" && row.department !== "critic") ?? [];
   const checking = bundle?.distribution.some((row) => row.status === "checking") ?? false;
+  const overrideNeeded = failed.length > 0 || needsInfo.length > 0;
+  const departmentRows = sortDepartmentReviews(
+    bundle?.distribution.filter((row) => row.department !== "critic") ?? [],
+  );
+  const criticReview = bundle?.distribution.find((row) => row.department === "critic");
+  const workflowRunning =
+    bundle?.workflow.some((step) => step.status === "running" || step.status === "pending") ?? false;
   const stalled = bundle?.workflow.some((step) => step.status === "failed" || step.status === "interrupted") ?? false;
+  const distributionUpdatedAt = bundle?.distribution.reduce<string | null>((latest, row) => {
+    if (!row.updated_at) return latest;
+    if (!latest || row.updated_at > latest) return row.updated_at;
+    return latest;
+  }, null);
+  const distributionStale =
+    distributionUpdatedAt != null &&
+    Date.now() - new Date(distributionUpdatedAt).getTime() > DISTRIBUTION_STALE_MS;
 
   useEffect(() => {
-    if (!checking) return;
+    if (!checking && !workflowRunning) return;
     const timer = window.setInterval(() => load(true), 4000);
     return () => window.clearInterval(timer);
-  }, [checking, load]);
+  }, [checking, workflowRunning, load]);
 
-  const runAction = async (key: string, action: () => Promise<void>, successMessage?: string) => {
+  useEffect(() => {
+    if (!showDecisionFooter) {
+      document.documentElement.style.removeProperty("--pp-footer-height");
+      return;
+    }
+    const sync = () => {
+      const desktop = footerRef.current;
+      const mobile = mobileFooterRef.current;
+      const height =
+        desktop && desktop.offsetHeight > 0
+          ? desktop.offsetHeight
+          : mobile?.offsetHeight ?? 0;
+      if (height > 0) {
+        document.documentElement.style.setProperty("--pp-footer-height", `${height}px`);
+      }
+    };
+    sync();
+    const ro = new ResizeObserver(sync);
+    if (footerRef.current) ro.observe(footerRef.current);
+    if (mobileFooterRef.current) ro.observe(mobileFooterRef.current);
+    return () => {
+      ro.disconnect();
+      document.documentElement.style.removeProperty("--pp-footer-height");
+    };
+  }, [showDecisionFooter, decisionSheetOpen, failed.length, needsInfo.length, conditions.length, note]);
+
+  const lookupBinForCase = () =>
+    runAction(
+      "lookup-bin",
+      async () => {
+        if (!caseData) return;
+        const borough = caseData.borough || "Queens";
+        const result = await api.resolveAddress(caseData.address, borough);
+        const match = result.matches.find((row) => row.bin) ?? result.matches[0];
+        if (!match?.bin) throw new Error("No BIN found for this address. Edit the address or enter BIN manually.");
+        await api.updateCase(caseId, {
+          bin: match.bin,
+          bbl: match.bbl || caseData.bbl,
+        });
+        await api.refreshBinDepartments(caseId);
+        setSelected(null);
+      },
+      "BIN resolved — fire, housing, and building reviews refreshed.",
+    );
+
+  const openEditCase = () => {
+    if (!caseData) return;
+    setEditForm({
+      address: caseData.address,
+      bbl: caseData.bbl,
+      bin: caseData.bin,
+      work_type: caseData.work_type,
+      owner: caseData.owner,
+      borough: caseData.borough ?? "",
+    });
+    setEditOpen(true);
+  };
+
+  const saveEditCase = () =>
+    runAction(
+      "edit-case",
+      async () => {
+        await api.updateCase(caseId, {
+          address: editForm.address.trim(),
+          bbl: editForm.bbl.trim(),
+          bin: editForm.bin.trim(),
+          work_type: editForm.work_type.trim(),
+          owner: editForm.owner.trim(),
+          borough: editForm.borough.trim() || undefined,
+        });
+        setEditOpen(false);
+      },
+      "Case details updated.",
+    );
+
+  const runAction = async (
+    key: string,
+    action: () => Promise<void>,
+    successMessage?: string,
+    reload = true,
+    stickySuccess = false,
+  ) => {
     setBusy(key);
     setError(null);
     try {
       await action();
-      load(true);
-      if (successMessage) push(successMessage, "success");
+      if (reload) load(true);
+      if (successMessage) push(successMessage, "success", { sticky: stickySuccess });
     } catch (err) {
-      const message = errorMessage(err);
-      setError(message);
-      push(message, "error");
+      setError(errorMessage(err));
     } finally {
       setBusy(null);
     }
@@ -162,34 +310,111 @@ export default function CasePage() {
 
   const appendCondition = (template: ConditionTemplate) => {
     const line = `${template.code}: ${template.label}`;
-    setNote((current) => (current.trim() ? `${current.trim()}\n${line}` : line));
+    onNoteChange(note.trim() ? `${note.trim()}\n${line}` : line);
     document.getElementById("clerk-note")?.focus();
   };
+
+  const decisionBlocked = mutating || checking;
+  const decisionDisabledTitle = mutating
+    ? "Wait for the current action to finish before recording a decision"
+    : checking
+      ? "Department reviews are still running"
+      : undefined;
 
   const decide = (decision: string, override = false) =>
     runAction(
       "decide",
       async () => {
         if (!note.trim()) throw new Error("Clerk note is required for the audit trail");
+        if (override && note.trim().length < 20) {
+          throw new Error("Override decisions require a clerk note of at least 20 characters explaining why.");
+        }
         await api.decide(caseId, decision, note.trim(), override);
         setApproveOpen(false);
         setChangesOpen(false);
+        setDecisionSheetOpen(false);
+        writeNoteDraft(caseId, "");
+        setNote("");
         const queue = await api.listTasks("open");
-        setNextTask(queue.find((task) => task.case_id !== caseId) ?? null);
+        const sorted = [...queue]
+          .filter((task) => task.case_id !== caseId)
+          .sort(
+            (a, b) => reviewClock(a.created_at).due.getTime() - reviewClock(b.created_at).due.getTime(),
+          );
+        setNextTask(sorted[0] ?? null);
       },
       decision === "approve" ? "Dossier approved." : "Changes requested.",
+      true,
+      true,
     );
 
   if (loading && !bundle) {
     return <Skeleton rows={8} label="Loading case" />;
   }
 
+  if (!bundle && bundleError && isNotFoundError(bundleError)) {
+    return (
+      <div className="space-y-4">
+        <EmptyState
+          title="Case not found"
+          description="This dossier ID does not exist or you no longer have access."
+          action={
+            <div className="flex flex-wrap justify-center gap-2">
+              <Link to="/tasks" className="px-4 py-2 rounded-md bg-pp-accent text-white text-sm">
+                My Tasks
+              </Link>
+              <Link to="/permits" className="px-4 py-2 rounded-md border border-pp-border text-sm">
+                Permit search
+              </Link>
+            </div>
+          }
+        />
+      </div>
+    );
+  }
+
+  if (!bundle && bundleError) {
+    return (
+      <div className="space-y-4">
+        <Link to={from === "search" ? "/permits" : "/tasks"} className="text-sm text-pp-accent hover:underline">
+          ← Back to {from === "search" ? "search" : "tasks"}
+        </Link>
+        {caseStub && (
+          <div>
+            <h1 className="text-2xl font-semibold text-pp-navy">{caseStub.address}</h1>
+            <p className="text-sm text-slate-600 mt-1">
+              BIN {caseStub.bin || "—"} · BBL {caseStub.bbl}
+            </p>
+          </div>
+        )}
+        <EmptyState
+          title={isNotFoundError(bundleError) ? "Case not found" : "Couldn't load this case"}
+          description={errorMessage(bundleError)}
+          action={
+            !isNotFoundError(bundleError) ? (
+              <button type="button" onClick={() => load()} className="px-4 py-2 rounded-md bg-pp-accent text-white text-sm">
+                Try again
+              </button>
+            ) : (
+              <Link to="/tasks" className="px-4 py-2 rounded-md border border-pp-border text-sm">
+                Back to tasks
+              </Link>
+            )
+          }
+        />
+      </div>
+    );
+  }
+
   if (!caseData) {
-    return <p className="text-red-700">{error ?? "Case not found"}</p>;
+    return <Skeleton rows={4} label="Loading case" />;
   }
 
   return (
-    <div className={`space-y-4 ${canDecide ? "pb-36" : ""}`}>
+    <div
+      className="space-y-4"
+      style={showDecisionFooter ? { paddingBottom: "var(--pp-footer-height, 9rem)" } : undefined}
+    >
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <Link
@@ -198,7 +423,7 @@ export default function CasePage() {
           >
             ← Back to {from === "search" ? "search" : "tasks"}
           </Link>
-          <h2 className="text-2xl font-semibold text-pp-navy mt-1">{caseData.address}</h2>
+          <h1 className="text-2xl font-semibold text-pp-navy mt-1">{caseData.address}</h1>
           <p className="text-sm text-slate-600 mt-1">
             BIN {caseData.bin || "—"} · BBL {caseData.bbl} · {caseData.work_type}
           </p>
@@ -225,21 +450,29 @@ export default function CasePage() {
         </div>
       )}
 
-      {failed.length > 0 && canDecide && (
-        <p className="text-sm text-red-900 bg-red-50 border border-red-200 rounded-md p-3" role="status">
-          {failed.length} department review{failed.length === 1 ? "" : "s"} failed. Request changes, or approve only with
-          a recorded override.
-        </p>
-      )}
-      {needsInfo.length > 0 && canDecide && (
-        <p className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded-md p-3" role="status">
-          {needsInfo.length} department review{needsInfo.length === 1 ? "" : "s"} need more information (
-          {needsInfo.map((row) => row.department).join(", ")}). Request changes or approve with override.
-        </p>
-      )}
-      {checking && canDecide && (
-        <p className="text-sm text-blue-900 bg-blue-50 border border-blue-200 rounded-md p-3" role="status">
-          Distribution is still running. Approval is blocked until department reviews finish.
+      {canDecide && (failed.length > 0 || needsInfo.length > 0 || checking) && (
+        <p className="text-sm text-slate-800 bg-slate-50 border border-pp-border rounded-md p-3" role="status">
+          {checking && "Distribution is still running — approval is blocked until reviews finish. "}
+          {!checking && failed.length > 0 && needsInfo.length > 0 && (
+            <>
+              {failed.length + needsInfo.length} department{failed.length + needsInfo.length === 1 ? "" : "s"} need
+              attention ({failed.map((row) => row.department).join(", ")} failed;{" "}
+              {needsInfo.map((row) => row.department).join(", ")} need info). See Distribution tab.
+            </>
+          )}
+          {!checking && failed.length > 0 && needsInfo.length === 0 && (
+            <>
+              {failed.length} department review{failed.length === 1 ? "" : "s"} failed — see Distribution tab. Request
+              changes or approve with override.
+            </>
+          )}
+          {!checking && needsInfo.length > 0 && failed.length === 0 && (
+            <>
+              {needsInfo.length} department review{needsInfo.length === 1 ? "" : "s"} need more information (
+              {needsInfo.map((row) => row.department).join(", ")}). Add missing identifiers on Summary or approve with
+              override.
+            </>
+          )}
         </p>
       )}
 
@@ -276,11 +509,27 @@ export default function CasePage() {
           className="grid md:grid-cols-2 gap-4"
         >
           <div className="bg-white border border-pp-border rounded-lg p-4">
-            <h3 className="font-medium text-pp-navy mb-3">Property</h3>
+            <div className="flex items-center justify-between gap-2 mb-3">
+              <h3 className="font-medium text-pp-navy">Property</h3>
+              {canDecide && (
+                <button
+                  type="button"
+                  onClick={openEditCase}
+                  className="text-sm text-pp-accent hover:underline"
+                >
+                  Edit case details
+                </button>
+              )}
+            </div>
             <dl className="text-sm space-y-2">
               <div className="flex justify-between gap-4">
                 <dt className="text-slate-500">Owner</dt>
-                <dd>{caseData.owner || "—"}</dd>
+                <dd className="text-right">
+                  {caseData.owner || "—"}
+                  <p className="text-xs text-slate-500 mt-1 text-left sm:text-right">
+                    Owner from NYC PLUTO (public record). Names in intake packets are redacted before storage.
+                  </p>
+                </dd>
               </div>
               <div className="flex justify-between gap-4">
                 <dt className="text-slate-500">Borough</dt>
@@ -290,25 +539,25 @@ export default function CasePage() {
                 <dt className="text-slate-500">Work</dt>
                 <dd className="text-right max-w-xs">{caseData.work_type}</dd>
               </div>
-              {bundle?.parcel?.zoning_district && (
+              {context?.parcel?.zoning_district && (
                 <div className="flex justify-between gap-4">
                   <dt className="text-slate-500">Zoning</dt>
-                  <dd>{bundle.parcel.zoning_district}</dd>
-                </div>
-              )}
-              {bundle?.parcel?.map_url && (
-                <div className="pt-2">
-                  <a
-                    href={bundle.parcel.map_url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-sm text-pp-accent hover:underline"
-                  >
-                    Open parcel map (NYC Open Data)
-                  </a>
+                  <dd>{context.parcel.zoning_district}</dd>
                 </div>
               )}
             </dl>
+            {context?.parcel?.map_url && (
+              <div className="pt-2 mt-2 border-t border-pp-border">
+                <a
+                  href={context.parcel.map_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-sm text-pp-accent hover:underline"
+                >
+                  Open parcel map (NYC Open Data)
+                </a>
+              </div>
+            )}
           </div>
           <div className="bg-white border border-pp-border rounded-lg p-4 space-y-4">
             <div>
@@ -317,37 +566,76 @@ export default function CasePage() {
               <p className="text-sm text-slate-600">Updated {new Date(caseData.updated_at).toLocaleString()}</p>
               <button
                 type="button"
-                disabled={busy === "briefing"}
+                disabled={!canDecide || busy === "briefing"}
                 onClick={() =>
                   runAction("briefing", async () => {
                     const result = await api.orchestrate(caseId);
                     setBriefing(result.summary);
                     writeBriefing(caseId, result.summary);
-                  }, "Clerk briefing generated.")
+                  }, hasStoredBriefing ? "Clerk briefing regenerated." : "Clerk briefing generated.")
                 }
                 className="mt-4 text-sm px-3 py-1.5 rounded-md bg-pp-accent text-white disabled:opacity-50"
               >
-                {busy === "briefing" ? "Generating…" : "Generate clerk briefing"}
+                {busy === "briefing"
+                  ? "Generating…"
+                  : hasStoredBriefing
+                    ? "Regenerate briefing"
+                    : "Generate clerk briefing"}
               </button>
-              {briefing && (
-                <p className="mt-3 text-sm text-slate-700 border-l-4 border-pp-accent pl-3 whitespace-pre-wrap">{briefing}</p>
+              {(briefing || storedBriefing?.summary) && (
+                <div className="mt-3">
+                  {storedBriefing?.generated_at && (
+                    <p className="text-xs text-slate-500 mb-1">
+                      Generated {new Date(storedBriefing.generated_at).toLocaleString()}
+                      {storedBriefing.generated_by ? ` · ${storedBriefing.generated_by}` : ""}
+                    </p>
+                  )}
+                  <p className="text-sm text-slate-700 border-l-4 border-pp-accent pl-3 whitespace-pre-wrap">
+                    {briefing || storedBriefing?.summary}
+                  </p>
+                </div>
               )}
             </div>
-            {bundle && bundle.related_permits.length > 0 && (
+            {contextLoading && (
+              <p className="text-sm text-slate-500">Loading NYC Open Data context…</p>
+            )}
+            {context && !contextLoading && (
               <div>
                 <h3 className="font-medium text-pp-navy mb-2">Related permits (NYC Open Data)</h3>
-                <ul className="text-sm space-y-2">
-                  {bundle.related_permits.map((permit) => (
-                    <li key={`${permit.job_number ?? permit.work_type}-${permit.filing_date}`} className="border border-pp-border rounded p-2">
-                      <p className="font-medium">{permit.job_number || "Permit"}</p>
-                      <p className="text-slate-600">{permit.work_type || "—"}</p>
-                      <p className="text-slate-500 text-xs">
-                        {permit.status || "Unknown status"}
-                        {permit.filing_date ? ` · filed ${permit.filing_date}` : ""}
-                      </p>
-                    </li>
-                  ))}
-                </ul>
+                {context.related_permits.length === 0 ? (
+                  <p className="text-sm text-slate-600">No related permit filings found for this BBL or BIN.</p>
+                ) : (
+                  <>
+                    <ul className="text-sm space-y-2">
+                      {(showAllPermits
+                        ? context.related_permits
+                        : context.related_permits.slice(0, 5)).map((permit, index) => (
+                        <li
+                          key={`${permit.job_number ?? "job"}-${permit.filing_date ?? index}-${permit.work_type ?? ""}`}
+                          className="border border-pp-border rounded p-2"
+                        >
+                          <p className="font-medium">{permit.job_number || "Filing (no job number)"}</p>
+                          <p className="text-slate-600">{permit.work_type || "—"}</p>
+                          <p className="text-slate-500 text-xs">
+                            {permit.status || "Unknown status"}
+                            {permit.filing_date ? ` · ${permit.filing_date}` : ""}
+                          </p>
+                        </li>
+                      ))}
+                    </ul>
+                    {context.related_permits.length > 5 && (
+                      <button
+                        type="button"
+                        className="mt-2 text-sm text-pp-accent hover:underline"
+                        onClick={() => setShowAllPermits((open) => !open)}
+                      >
+                        {showAllPermits
+                          ? "Show fewer"
+                          : `Show all ${context.related_permits.length} permits`}
+                      </button>
+                    )}
+                  </>
+                )}
               </div>
             )}
           </div>
@@ -356,20 +644,58 @@ export default function CasePage() {
 
       {tab === "distribution" && bundle && (
         <div role="tabpanel" id={`${tabsId}-panel-distribution`} aria-labelledby={`${tabsId}-distribution`} className="space-y-3">
+          {stalled && (
+            <p className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded-md p-3" role="status">
+              Department workflow stalled — resume to continue from the last checkpoint. Completed departments are not
+              re-run.
+            </p>
+          )}
           {bundle.workflow.length > 0 && (
             <div className="bg-slate-50 border border-pp-border rounded-lg p-3 text-sm">
               <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
                 <p className="font-medium text-pp-navy">Department workflow</p>
-                {stalled && (
+                <div className="flex flex-wrap gap-2">
+                  {workflowRunning && (
+                    <button
+                      type="button"
+                      disabled={busy === "interrupt"}
+                      onClick={() =>
+                        runAction("interrupt", async () => {
+                          await api.interruptWorkflow(caseId);
+                        }, "Worker crash simulated — resume to continue.")
+                      }
+                      className="text-sm px-3 py-1 rounded-md border border-red-300 text-red-800 bg-white disabled:opacity-50"
+                    >
+                      {busy === "interrupt" ? "Interrupting…" : "Simulate worker crash"}
+                    </button>
+                  )}
+                  {stalled && (
+                    <button
+                      type="button"
+                      disabled={busy === "resume"}
+                      onClick={() =>
+                        runAction("resume", async () => {
+                          await api.resumeWorkflow(caseId);
+                        }, "Workflow resumed from checkpoint.")
+                      }
+                      className="text-sm px-3 py-1 rounded-md bg-pp-navy text-white disabled:opacity-50"
+                    >
+                      {busy === "resume" ? "Resuming…" : "Resume workflow"}
+                    </button>
+                  )}
                   <button
                     type="button"
-                    disabled={busy === "resume"}
-                    onClick={() => runAction("resume", async () => { await api.resumeWorkflow(caseId); })}
-                    className="text-sm px-3 py-1 rounded-md bg-pp-navy text-white disabled:opacity-50"
+                    disabled={busy === "gcp"}
+                    onClick={() =>
+                      runAction("gcp", async () => {
+                        await api.startGcpWorkflow(caseId);
+                      }, "Cloud Workflows execution started.")
+                    }
+                    className="text-sm px-3 py-1 rounded-md border border-pp-border bg-white disabled:opacity-50"
                   >
-                    {busy === "resume" ? "Resuming…" : "Resume workflow"}
+                    {busy === "gcp" ? "Starting…" : "Run on Cloud Workflows"}
                   </button>
-                )}
+                </div>
               </div>
               <div className="flex flex-wrap gap-2">
                 {bundle.workflow.map((step) => (
@@ -383,11 +709,31 @@ export default function CasePage() {
               </div>
             </div>
           )}
-          <div className="flex justify-end">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            {distributionUpdatedAt && (
+              <div className="text-sm text-slate-600">
+                <p>Data as of {new Date(distributionUpdatedAt).toLocaleString()}</p>
+                {distributionStale && (
+                  <p className="text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1 mt-1 text-xs">
+                    Distribution data is over 24 hours old — refresh from NYC Open Data before deciding.
+                  </p>
+                )}
+              </div>
+            )}
             <button
               type="button"
-              disabled={busy === "refresh"}
-              onClick={() => runAction("refresh", async () => { await api.refreshDistribution(caseId); })}
+              disabled={!canDecide || busy === "refresh"}
+              onClick={() =>
+                runAction(
+                  "refresh",
+                  async () => {
+                    const distribution = await api.refreshDistribution(caseId);
+                    setBundle((prev) => (prev ? { ...prev, distribution } : prev));
+                  },
+                  "Distribution refreshed from NYC Open Data.",
+                  false,
+                )
+              }
               className="text-sm px-3 py-1.5 rounded-md bg-pp-accent text-white disabled:opacity-50"
             >
               {busy === "refresh" ? "Refreshing…" : "Refresh from NYC Open Data"}
@@ -399,7 +745,8 @@ export default function CasePage() {
               description="Distribution results appear after intake or after you refresh from NYC Open Data."
             />
           ) : (
-            <div className="table-scroll rounded-lg border border-pp-border bg-white" tabIndex={0}>
+            <>
+            <div className="table-scroll rounded-lg border border-pp-border bg-white">
               <table className="min-w-full text-sm">
                 <caption className="sr-only">Department distribution reviews. Activate a row for findings.</caption>
                 <thead className="bg-slate-50 text-slate-600 text-left">
@@ -413,35 +760,54 @@ export default function CasePage() {
                     <th scope="col" className="px-4 py-2">
                       Summary
                     </th>
+                    <th scope="col" className="px-4 py-2">
+                      Updated
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
-                  {bundle.distribution.map((row) => (
-                    <tr
-                      key={row.department}
-                      className="border-t border-pp-border hover:bg-slate-50 cursor-pointer"
-                      onClick={() => setSelected(row)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter" || event.key === " ") {
-                          event.preventDefault();
-                          setSelected(row);
-                        }
-                      }}
-                      tabIndex={0}
-                    >
-                      <td className="px-4 py-3 capitalize font-medium">
-                        {row.department}
-                        <span className="sr-only"> — open details</span>
+                  {departmentRows.map((row) => (
+                    <tr key={row.department} className="border-t border-pp-border hover:bg-slate-50">
+                      <td className="px-4 py-3">
+                        <button
+                          type="button"
+                          onClick={() => setSelected(row)}
+                          className="flex items-center gap-2 text-left capitalize font-medium text-pp-navy hover:text-pp-accent w-full"
+                        >
+                          <span>{row.department}</span>
+                          <span className="text-slate-400 text-xs" aria-hidden="true">›</span>
+                          <span className="sr-only">Open {row.department} review details</span>
+                        </button>
                       </td>
                       <td className="px-4 py-3">
                         <StatusBadge status={row.status} />
                       </td>
                       <td className="px-4 py-3 text-slate-600">{row.summary}</td>
+                      <td className="px-4 py-3 text-slate-500 text-xs">
+                        {new Date(row.updated_at).toLocaleString()}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
+            {criticReview && (
+              <div className="bg-white border border-pp-border rounded-lg p-4">
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                  <h3 className="font-medium text-pp-navy">Policy check</h3>
+                  <StatusBadge status={criticReview.status} />
+                </div>
+                <p className="text-sm text-slate-600">{criticReview.summary}</p>
+                <button
+                  type="button"
+                  className="mt-3 text-sm text-pp-accent hover:underline"
+                  onClick={() => setSelected(criticReview)}
+                >
+                  View policy check details
+                </button>
+              </div>
+            )}
+            </>
           )}
         </div>
       )}
@@ -494,7 +860,8 @@ export default function CasePage() {
       {tab === "claims" && bundle && (
         <div role="tabpanel" id={`${tabsId}-panel-claims`} aria-labelledby={`${tabsId}-claims`} className="space-y-4">
           <p className="text-sm text-slate-600">
-            Claims are recorded on the case and handed off to DOB NOW with a reference ID for the audit trail.
+            Claims are recorded on the case file with a reference ID for manual DOB NOW entry. The applicant is not
+            notified automatically.
           </p>
           {canDecide && (
             <div className="flex flex-col sm:flex-row gap-2">
@@ -516,7 +883,7 @@ export default function CasePage() {
                     if (!claimText.trim()) throw new Error("Enter a document request for the applicant");
                     await api.createClaim(caseId, claimText.trim());
                     setClaimText("");
-                  }, "Claim recorded and DOB NOW handoff reference saved.")
+                  }, "Claim recorded with manual DOB NOW reference.")
                 }
                 className="px-4 py-2 rounded-md bg-pp-accent text-white text-sm disabled:opacity-50"
               >
@@ -536,10 +903,42 @@ export default function CasePage() {
                   </div>
                   <p>{claim.message}</p>
                   {claim.notification_reference && (
-                    <p className="text-xs text-slate-500">
-                      DOB NOW handoff · {claim.notification_reference}
-                      {claim.notified_at ? ` · ${new Date(claim.notified_at).toLocaleString()}` : ""}
-                    </p>
+                    <div className="text-xs text-slate-600 space-y-2 border border-pp-border rounded-md p-3 bg-slate-50">
+                      <p>
+                        Reference for manual DOB NOW entry:{" "}
+                        <span className="font-mono">{claim.notification_reference}</span>
+                      </p>
+                      <p className="text-slate-500">The applicant is not notified automatically.</p>
+                      <div className="flex flex-wrap items-center gap-3">
+                        <button
+                          type="button"
+                          className="text-xs px-2 py-1 rounded-md border border-pp-border bg-white"
+                          onClick={() => navigator.clipboard.writeText(claim.notification_reference ?? "")}
+                        >
+                          Copy reference
+                        </button>
+                        {!claim.manual_dob_now_sent && (
+                          <button
+                            type="button"
+                            className="text-xs px-2 py-1 rounded-md border border-pp-border bg-white"
+                            disabled={busy === `dob-${claim.id}`}
+                            onClick={() =>
+                              runAction(`dob-${claim.id}`, async () => {
+                                await api.markClaimDobNowSent(caseId, claim.id);
+                              }, "Marked as sent to DOB NOW.")
+                            }
+                          >
+                            {busy === `dob-${claim.id}` ? "Saving…" : "Mark as sent to DOB NOW"}
+                          </button>
+                        )}
+                        {claim.manual_dob_now_sent && (
+                          <span className="text-emerald-800">
+                            Sent to DOB NOW manually
+                            {claim.notified_at ? ` · ${new Date(claim.notified_at).toLocaleString()}` : ""}
+                          </span>
+                        )}
+                      </div>
+                    </div>
                   )}
                   {claim.response_message && (
                     <div className="rounded-md bg-slate-50 border border-pp-border p-3">
@@ -612,12 +1011,12 @@ export default function CasePage() {
       {tab === "audit" && bundle && (
         <div role="tabpanel" id={`${tabsId}-panel-audit`} aria-labelledby={`${tabsId}-audit`} className="space-y-6">
           <div className="bg-white border border-pp-border rounded-lg p-4">
-            <h3 className="font-medium text-pp-navy mb-3">Trace replay</h3>
+            <h3 className="font-medium text-pp-navy mb-3">Activity log</h3>
             <TraceReplay
               spans={bundle.trace}
-              cloudTraceUrl={admin ? bundle.observability.cloud_trace_url : null}
-              langfuseUrl={admin ? bundle.observability.langfuse_url : null}
-              gcpWorkflowsUrl={admin ? bundle.observability.gcp_workflows_url : null}
+              cloudTraceUrl={bundle.observability.cloud_trace_url}
+              langfuseUrl={bundle.observability.langfuse_url}
+              gcpWorkflowsUrl={bundle.observability.gcp_workflows_url}
             />
           </div>
           <div>
@@ -626,15 +1025,47 @@ export default function CasePage() {
               <EmptyState title="No audit events yet" description="Clerk actions and system events will appear here." />
             ) : (
               <ol className="space-y-2">
-                {bundle.audit.map((event) => (
-                  <li key={event.id} className="bg-white border border-pp-border rounded-md p-3 text-sm">
-                    <p className="font-medium capitalize">{formatStatus(event.action)}</p>
-                    <p className="text-slate-600">{event.detail}</p>
-                    <p className="text-xs text-slate-500 mt-1">
-                      {event.actor} · {new Date(event.at).toLocaleString()}
-                    </p>
-                  </li>
-                ))}
+                {groupAuditEvents(bundle.audit).map((item, index) => {
+                  if (item.kind === "workflow_group") {
+                    return (
+                      <li
+                        key={`workflow-group-${index}`}
+                        className="bg-slate-50 border border-pp-border rounded-md p-3 text-sm"
+                      >
+                        <p className="font-medium text-slate-700">
+                          {item.count} department workflow step{item.count === 1 ? "" : "s"} completed
+                        </p>
+                        <p className="text-xs text-slate-500 mt-1">
+                          {item.actor} · {new Date(item.at).toLocaleString()}
+                        </p>
+                      </li>
+                    );
+                  }
+                  const { event, summary, truncated } = item;
+                  const expanded = expandedAudit[event.id];
+                  return (
+                    <li key={event.id} className="bg-white border border-pp-border rounded-md p-3 text-sm">
+                      <p className="font-medium capitalize">{formatStatus(event.action)}</p>
+                      <p className="text-slate-600 whitespace-pre-wrap">
+                        {truncated && expanded ? event.detail : summary}
+                      </p>
+                      {truncated && (
+                        <button
+                          type="button"
+                          className="text-xs text-pp-accent hover:underline mt-1"
+                          onClick={() =>
+                            setExpandedAudit((prev) => ({ ...prev, [event.id]: !prev[event.id] }))
+                          }
+                        >
+                          {expanded ? "Show less" : "Show more"}
+                        </button>
+                      )}
+                      <p className="text-xs text-slate-500 mt-1">
+                        {event.actor} · {new Date(event.at).toLocaleString()}
+                      </p>
+                    </li>
+                  );
+                })}
               </ol>
             )}
           </div>
@@ -652,7 +1083,7 @@ export default function CasePage() {
             <StatusBadge status={selected.status} />
             <p className="text-sm text-slate-700">{selected.summary}</p>
             <div>
-              <h4 className="text-sm font-medium">Findings</h4>
+              <h3 className="text-sm font-medium">Findings</h3>
               <ul className="mt-2 text-sm list-disc pl-5 space-y-1">
                 {selected.findings.map((finding) => (
                   <li key={finding}>{finding}</li>
@@ -660,7 +1091,11 @@ export default function CasePage() {
               </ul>
             </div>
             <div>
-              <h4 className="text-sm font-medium">Evidence (NYC Open Data)</h4>
+              <h3 className="text-sm font-medium">
+                {selected.department === "critic" || selected.evidence.some((ev) => ev.source === "Policy check")
+                  ? "Policy check"
+                  : "Evidence (NYC Open Data)"}
+              </h3>
               <ul className="mt-2 text-sm space-y-2">
                 {selected.evidence.map((ev) => (
                   <li key={`${ev.dataset_id}-${ev.label}`} className="border border-pp-border rounded p-2">
@@ -672,7 +1107,7 @@ export default function CasePage() {
             </div>
             {selected.citations.length > 0 && (
               <div>
-                <h4 className="text-sm font-medium">Citations</h4>
+                <h3 className="text-sm font-medium">Citations</h3>
                 {selected.citations.map((citation) => (
                   <blockquote key={citation.code} className="mt-2 text-sm border-l-4 border-pp-accent pl-3 text-slate-700">
                     <p className="font-medium">{citation.code}</p>
@@ -681,69 +1116,246 @@ export default function CasePage() {
                 ))}
               </div>
             )}
+            {selected.status === "needs_info" &&
+              (selected.summary.toLowerCase().includes("bin") || !caseData.bin) && (
+                <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm space-y-2">
+                  <p className="text-amber-900">This review needs a BIN to query NYC Open Data.</p>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      disabled={busy === "lookup-bin"}
+                      onClick={() => lookupBinForCase()}
+                      className="px-3 py-1.5 rounded-md bg-pp-accent text-white text-sm disabled:opacity-50"
+                    >
+                      {busy === "lookup-bin" ? "Looking up…" : "Look up BIN from address"}
+                    </button>
+                    {canDecide && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelected(null);
+                          openEditCase();
+                        }}
+                        className="px-3 py-1.5 rounded-md border border-pp-border text-sm"
+                      >
+                        Enter BIN manually
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
           </div>
         )}
       </ModalDialog>
 
-      {canDecide && (
-        <footer className="fixed bottom-0 left-0 right-0 z-10 bg-white border-t border-pp-border">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex flex-col gap-3">
-            {failed.length > 0 && (
-              <p className="text-xs text-red-800">Failed reviews: {failed.map((row) => row.department).join(", ")}</p>
-            )}
-            {needsInfo.length > 0 && (
-              <p className="text-xs text-amber-800">
-                Needs info: {needsInfo.map((row) => row.department).join(", ")}
-              </p>
-            )}
-            {conditions.length > 0 && (
-              <div className="flex flex-wrap gap-2">
-                {conditions.map((template) => (
-                  <button
-                    key={template.id}
-                    type="button"
-                    onClick={() => appendCondition(template)}
-                    className="px-2 py-1 text-xs rounded-md border border-pp-border bg-slate-50 hover:bg-white"
-                  >
-                    {template.code}
-                  </button>
-                ))}
-              </div>
-            )}
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-            <div className="flex flex-col gap-2 sm:flex-1">
-              <label htmlFor="clerk-note" className="text-sm font-medium text-slate-700">
-                Clerk note (required)
-              </label>
-              <input
-                id="clerk-note"
-                className="w-full border border-pp-border rounded-md px-3 py-2 text-sm"
-                placeholder="Clerk note — required for the audit trail"
-                value={note}
-                onChange={(e) => setNote(e.target.value)}
-              />
+      <ModalDialog open={editOpen} title="Edit case details" onClose={() => setEditOpen(false)}>
+        <div className="space-y-3 text-sm">
+          <label className="block">
+            <span className="font-medium text-slate-700">Address</span>
+            <input
+              className="mt-1 w-full border border-pp-border rounded-md px-3 py-2"
+              value={editForm.address}
+              onChange={(e) => setEditForm((f) => ({ ...f, address: e.target.value }))}
+            />
+          </label>
+          <label className="block">
+            <span className="font-medium text-slate-700">BBL</span>
+            <input
+              className="mt-1 w-full border border-pp-border rounded-md px-3 py-2"
+              value={editForm.bbl}
+              onChange={(e) => setEditForm((f) => ({ ...f, bbl: e.target.value }))}
+            />
+          </label>
+          <label className="block">
+            <span className="font-medium text-slate-700">BIN</span>
+            <input
+              className="mt-1 w-full border border-pp-border rounded-md px-3 py-2"
+              value={editForm.bin}
+              onChange={(e) => setEditForm((f) => ({ ...f, bin: e.target.value }))}
+            />
+          </label>
+          <label className="block">
+            <span className="font-medium text-slate-700">Work type</span>
+            <input
+              className="mt-1 w-full border border-pp-border rounded-md px-3 py-2"
+              value={editForm.work_type}
+              onChange={(e) => setEditForm((f) => ({ ...f, work_type: e.target.value }))}
+            />
+          </label>
+          <label className="block">
+            <span className="font-medium text-slate-700">Owner</span>
+            <input
+              className="mt-1 w-full border border-pp-border rounded-md px-3 py-2"
+              value={editForm.owner}
+              onChange={(e) => setEditForm((f) => ({ ...f, owner: e.target.value }))}
+            />
+          </label>
+          <label className="block">
+            <span className="font-medium text-slate-700">Borough</span>
+            <input
+              className="mt-1 w-full border border-pp-border rounded-md px-3 py-2"
+              value={editForm.borough}
+              onChange={(e) => setEditForm((f) => ({ ...f, borough: e.target.value }))}
+            />
+          </label>
+          <div className="flex gap-2 pt-2">
+            <button
+              type="button"
+              disabled={busy === "edit-case"}
+              onClick={() => saveEditCase()}
+              className="px-4 py-2 rounded-md bg-pp-accent text-white disabled:opacity-50"
+            >
+              {busy === "edit-case" ? "Saving…" : "Save changes"}
+            </button>
+            <button type="button" onClick={() => setEditOpen(false)} className="px-4 py-2 rounded-md border border-pp-border">
+              Cancel
+            </button>
+          </div>
+        </div>
+      </ModalDialog>
+
+      {showDecisionFooter && (
+        <>
+          <div
+            ref={mobileFooterRef}
+            className="sm:hidden fixed bottom-0 left-0 right-0 z-10 bg-white border-t border-pp-border p-3"
+          >
+            <button
+              type="button"
+              onClick={() => setDecisionSheetOpen(true)}
+              className="w-full px-4 py-3 rounded-md bg-pp-navy text-white text-sm font-medium"
+            >
+              Record decision
+            </button>
+          </div>
+
+          <dialog
+            className="pp-dialog sm:hidden fixed inset-x-0 bottom-0 z-20 m-0 max-h-[85vh] w-full rounded-t-xl border border-pp-border bg-white p-4 shadow-xl open:flex open:flex-col"
+            open={decisionSheetOpen}
+            onClose={() => setDecisionSheetOpen(false)}
+          >
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="font-medium text-pp-navy">Record decision</h2>
+              <button type="button" onClick={() => setDecisionSheetOpen(false)} className="text-sm text-slate-600">
+                Close
+              </button>
             </div>
+            <div className="flex-1 overflow-y-auto space-y-3 pb-4">
+              {conditions.length > 0 && (
+                <div>
+                  <p className="text-xs font-medium text-slate-600 mb-2">Insert standard condition:</p>
+                  <div className="flex flex-wrap gap-2">
+                    {conditions.map((template) => (
+                      <button
+                        key={template.id}
+                        type="button"
+                        onClick={() => appendCondition(template)}
+                        className="px-2 py-1 text-xs rounded-md border border-pp-border bg-slate-50"
+                      >
+                        {template.code}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <div>
+                <label htmlFor="clerk-note-mobile" className="text-sm font-medium text-slate-700">
+                  Clerk note (required)
+                </label>
+                <textarea
+                  id="clerk-note-mobile"
+                  className="mt-1 w-full border border-pp-border rounded-md px-3 py-2 text-sm min-h-24"
+                  placeholder="Clerk note — required for the audit trail"
+                  value={note}
+                  onChange={(e) => onNoteChange(e.target.value)}
+                />
+                {overrideNeeded && (
+                  <p className="text-xs text-slate-500 mt-1">Override decisions require at least 20 characters.</p>
+                )}
+              </div>
               <div className="flex gap-2">
                 <button
                   type="button"
-                  disabled={busy === "decide" || checking}
-                  onClick={() => requireNote() && setApproveOpen(true)}
-                  className="flex-1 sm:flex-none px-4 py-2 rounded-md bg-emerald-700 text-white text-sm font-medium disabled:opacity-50"
+                  disabled={busy === "decide" || decisionBlocked}
+                  title={decisionDisabledTitle}
+                  onClick={() => requireNote(overrideNeeded) && setApproveOpen(true)}
+                  className="flex-1 px-4 py-2 rounded-md bg-emerald-700 text-white text-sm font-medium disabled:opacity-50"
                 >
                   Approve dossier
                 </button>
                 <button
                   type="button"
-                  disabled={busy === "decide"}
+                  disabled={busy === "decide" || mutating}
                   onClick={() => requireNote() && setChangesOpen(true)}
-                  className="flex-1 sm:flex-none px-4 py-2 rounded-md border border-pp-border text-sm font-medium disabled:opacity-50"
+                  className="flex-1 px-4 py-2 rounded-md border border-pp-border text-sm font-medium disabled:opacity-50"
                 >
                   Request changes
                 </button>
               </div>
             </div>
-          </div>
-        </footer>
+          </dialog>
+
+          <footer
+            ref={footerRef}
+            className="hidden sm:block fixed bottom-0 left-0 right-0 z-10 bg-white border-t border-pp-border"
+          >
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex flex-col gap-3">
+              {conditions.length > 0 && (
+                <div>
+                  <p className="text-xs font-medium text-slate-600 mb-2">Insert standard condition:</p>
+                  <div className="flex flex-wrap gap-2">
+                    {conditions.map((template) => (
+                      <button
+                        key={template.id}
+                        type="button"
+                        onClick={() => appendCondition(template)}
+                        className="px-2 py-1 text-xs rounded-md border border-pp-border bg-slate-50 hover:bg-white"
+                      >
+                        {template.code}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+                <div className="flex flex-col gap-2 sm:flex-1">
+                  <label htmlFor="clerk-note" className="text-sm font-medium text-slate-700">
+                    Clerk note (required)
+                  </label>
+                  <textarea
+                    id="clerk-note"
+                    className="w-full border border-pp-border rounded-md px-3 py-2 text-sm min-h-20"
+                    placeholder="Clerk note — required for the audit trail"
+                    value={note}
+                    onChange={(e) => onNoteChange(e.target.value)}
+                  />
+                  {overrideNeeded && (
+                    <p className="text-xs text-slate-500">Override decisions require at least 20 characters.</p>
+                  )}
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    disabled={busy === "decide" || decisionBlocked}
+                    title={decisionDisabledTitle}
+                    onClick={() => requireNote(overrideNeeded) && setApproveOpen(true)}
+                    className="flex-1 sm:flex-none px-4 py-2 rounded-md bg-emerald-700 text-white text-sm font-medium disabled:opacity-50"
+                  >
+                    Approve dossier
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy === "decide" || mutating}
+                    onClick={() => requireNote() && setChangesOpen(true)}
+                    className="flex-1 sm:flex-none px-4 py-2 rounded-md border border-pp-border text-sm font-medium disabled:opacity-50"
+                  >
+                    Request changes
+                  </button>
+                </div>
+              </div>
+            </div>
+          </footer>
+        </>
       )}
 
       <ConfirmDialog

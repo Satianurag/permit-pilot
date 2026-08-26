@@ -51,6 +51,6 @@ def orchestrate(
         case_id,
         actor=clerk_actor(current_user),
         action="briefing_generated",
-        detail=summary,
+        detail=summary[:200] + ("…" if len(summary) > 200 else ""),
     )
     return {"case_id": case_id, "summary": summary, "model": "vertex"}

@@ -48,7 +48,8 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen bg-pp-surface flex items-center justify-center px-4">
-      <div className="w-full max-w-md rounded-xl border border-pp-border bg-white p-8">
+      <main className="w-full max-w-md">
+        <div className="rounded-xl border border-pp-border bg-white p-8">
         <p className="text-xs uppercase tracking-widest text-slate-500">NYC Department of Buildings</p>
         <h1 className="mt-1 text-2xl font-semibold text-pp-navy">Permit Pilot</h1>
         <p className="mt-2 text-sm text-slate-600">Clerk sign-in for the review queue and case files.</p>
@@ -114,7 +115,8 @@ export default function LoginPage() {
             {loading ? "Signing in…" : "Sign in"}
           </button>
         </form>
-      </div>
+        </div>
+      </main>
     </div>
   );
 }

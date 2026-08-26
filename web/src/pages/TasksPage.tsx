@@ -4,9 +4,11 @@ import EmptyState from "../components/EmptyState";
 import IntakeModal from "../components/IntakeModal";
 import Skeleton from "../components/Skeleton";
 import { StatusBadge } from "../components/StatusBadge";
+import { useToast } from "../components/Toast";
 import { api, Task } from "../lib/api";
 import { errorMessage } from "../lib/errors";
 import { formatStatus } from "../lib/formatStatus";
+import { getStoredUser } from "../lib/auth";
 import { clockClass, reviewClock } from "../lib/reviewClock";
 
 const FILTERS = [
@@ -15,15 +17,27 @@ const FILTERS = [
   { id: "all", label: "All" },
 ] as const;
 
+const ASSIGN_FILTERS = [
+  { id: "all", label: "All open work" },
+  { id: "mine", label: "Assigned to me" },
+  { id: "unassigned", label: "Unassigned" },
+] as const;
+
 export default function TasksPage() {
+  const { push } = useToast();
   const [params, setParams] = useSearchParams();
   const rawStatus = params.get("status");
   const filter: (typeof FILTERS)[number]["id"] =
     rawStatus === "completed" || rawStatus === "all" ? rawStatus : "open";
+  const rawAssign = params.get("assign");
+  const assignFilter: (typeof ASSIGN_FILTERS)[number]["id"] =
+    rawAssign === "mine" || rawAssign === "unassigned" ? rawAssign : "all";
   const [tasks, setTasks] = useState<Task[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [intakeOpen, setIntakeOpen] = useState(false);
+  const [claimingId, setClaimingId] = useState<string | null>(null);
+  const currentUser = getStoredUser();
 
   const setFilter = (id: (typeof FILTERS)[number]["id"]) => {
     const next = new URLSearchParams(params);
@@ -32,16 +46,36 @@ export default function TasksPage() {
     setParams(next, { replace: true });
   };
 
-  const load = (status: string) => {
+  const setAssignFilter = (id: (typeof ASSIGN_FILTERS)[number]["id"]) => {
+    const next = new URLSearchParams(params);
+    if (id === "all") next.delete("assign");
+    else next.set("assign", id);
+    setParams(next, { replace: true });
+  };
+
+  const load = (status: string, assign: (typeof ASSIGN_FILTERS)[number]["id"]) => {
     setLoading(true);
     api
-      .listTasks(status)
+      .listTasks(status, assign === "mine", assign === "unassigned")
       .then(setTasks)
       .catch((err: Error) => setError(err.message))
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => load(filter), [filter]);
+  useEffect(() => load(filter, assignFilter), [filter, assignFilter]);
+
+  const claimTask = async (task: Task) => {
+    setClaimingId(task.id);
+    try {
+      await api.claimTask(task.id);
+      push("Task assigned to you.", "success");
+      load(filter, assignFilter);
+    } catch (err) {
+      push(errorMessage(err), "error");
+    } finally {
+      setClaimingId(null);
+    }
+  };
 
   const sorted = useMemo(
     () =>
@@ -56,7 +90,7 @@ export default function TasksPage() {
     <div className="space-y-4">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h2 className="text-2xl font-semibold text-pp-navy">My Tasks</h2>
+          <h1 className="text-2xl font-semibold text-pp-navy">My Tasks</h1>
           <p className="text-sm text-slate-600">
             Oldest review clock first. Open a row to land on Distribution — the work, not the cover sheet.
           </p>
@@ -81,6 +115,23 @@ export default function TasksPage() {
               className={`px-3 py-1.5 text-sm rounded-md border ${
                 filter === item.id
                   ? "bg-pp-navy text-white border-pp-navy"
+                  : "bg-white border-pp-border text-slate-700"
+              }`}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+        <div className="flex gap-1" role="group" aria-label="Assignee filter">
+          {ASSIGN_FILTERS.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              aria-pressed={assignFilter === item.id}
+              onClick={() => setAssignFilter(item.id)}
+              className={`px-3 py-1.5 text-sm rounded-md border ${
+                assignFilter === item.id
+                  ? "bg-pp-slate text-white border-pp-slate"
                   : "bg-white border-pp-border text-slate-700"
               }`}
             >
@@ -115,7 +166,7 @@ export default function TasksPage() {
           }
         />
       ) : (
-        <div className="table-scroll rounded-lg border border-pp-border bg-white" tabIndex={0}>
+        <div className="table-scroll rounded-lg border border-pp-border bg-white">
           <table className="min-w-full text-sm">
             <caption className="sr-only">Permit review tasks sorted by review clock</caption>
             <thead className="bg-slate-50 text-left text-slate-600">
@@ -130,13 +181,22 @@ export default function TasksPage() {
                   Review clock
                 </th>
                 <th scope="col" className="px-4 py-2 font-medium">
+                  Assignee
+                </th>
+                <th scope="col" className="px-4 py-2 font-medium">
                   Status
+                </th>
+                <th scope="col" className="px-4 py-2 font-medium">
+                  Actions
                 </th>
               </tr>
             </thead>
             <tbody>
               {sorted.map((task) => {
                 const clock = reviewClock(task.created_at);
+                const canClaim =
+                  task.status === "open" &&
+                  (!task.assignee || task.assignee !== currentUser?.username);
                 return (
                   <tr key={task.id} className="relative border-t border-pp-border hover:bg-slate-50">
                     <td className="px-4 py-3">
@@ -148,9 +208,24 @@ export default function TasksPage() {
                       </Link>
                     </td>
                     <td className="px-4 py-3 text-slate-600">{formatStatus(task.task_type)}</td>
-                    <td className={`px-4 py-3 ${clockClass(clock.kind)}`}>{clock.label}</td>
+                    <td className={`px-4 py-3 ${task.status === "open" ? clockClass(clock.kind) : "text-slate-500"}`}>
+                      {task.status === "open" ? clock.label : "—"}
+                    </td>
+                    <td className="px-4 py-3 text-slate-600">{task.assignee ?? "Unassigned"}</td>
                     <td className="px-4 py-3">
                       <StatusBadge status={task.status} />
+                    </td>
+                    <td className="px-4 py-3 relative z-10">
+                      {canClaim && (
+                        <button
+                          type="button"
+                          disabled={claimingId === task.id}
+                          onClick={() => void claimTask(task)}
+                          className="text-sm text-pp-accent hover:underline disabled:opacity-50"
+                        >
+                          {claimingId === task.id ? "Claiming…" : "Claim"}
+                        </button>
+                      )}
                     </td>
                   </tr>
                 );
@@ -159,7 +234,7 @@ export default function TasksPage() {
           </table>
         </div>
       )}
-      <IntakeModal open={intakeOpen} onClose={() => setIntakeOpen(false)} onCreated={() => load(filter)} />
+      <IntakeModal open={intakeOpen} onClose={() => setIntakeOpen(false)} onCreated={() => load(filter, assignFilter)} />
     </div>
   );
 }

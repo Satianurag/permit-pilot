@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 
 from permit_pilot_core.socrata.client import SocrataClient, borough_label
 from permit_pilot_api.auth import get_current_user
@@ -42,5 +42,5 @@ async def resolve_address(
             }
         )
     if not matches:
-        raise HTTPException(status_code=404, detail="No PLUTO match for that address and borough")
+        return {"matches": []}
     return {"matches": matches}

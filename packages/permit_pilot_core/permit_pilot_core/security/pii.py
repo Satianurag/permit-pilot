@@ -38,7 +38,10 @@ def _redact_dlp(text: str, project_id: str) -> tuple[str, list[str]]:
         request={
             "parent": parent,
             "item": {"value": text},
-            "inspect_config": {"info_types": _DLP_INFO_TYPES},
+            "inspect_config": {
+                "info_types": _DLP_INFO_TYPES,
+                "min_likelihood": "POSSIBLE",
+            },
             "deidentify_config": {
                 "info_type_transformations": {
                     "transformations": [
@@ -60,13 +63,23 @@ def _redact_dlp(text: str, project_id: str) -> tuple[str, list[str]]:
 
 
 def redact_pii(text: str) -> tuple[str, list[str]]:
-    """Redact PII with Cloud DLP on Cloud Run; regex fallback for local development."""
+    """Always apply deterministic regex redaction, then Cloud DLP when available."""
     if not text.strip():
         return text, []
+
+    redacted, regex_findings = _redact_regex(text)
+    findings = list(regex_findings)
+
     project = os.environ.get("GOOGLE_CLOUD_PROJECT")
     if project and os.environ.get("K_SERVICE"):
-        return _redact_dlp(text, project)
-    redacted, findings = _redact_regex(text)
-    if findings:
+        try:
+            dlp_redacted, dlp_findings = _redact_dlp(redacted, project)
+            redacted = dlp_redacted
+            findings.extend(dlp_findings)
+        except Exception:
+            if not findings:
+                findings.append("DLP unavailable — regex redaction only")
+    elif regex_findings:
         findings.insert(0, "Local regex redaction (Cloud DLP used in production)")
+
     return redacted, findings

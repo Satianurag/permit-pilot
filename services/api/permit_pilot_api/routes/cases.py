@@ -19,7 +19,9 @@ from permit_pilot_core.models import (
     Claim,
     ClaimResponseRequest,
     ClerkBriefing,
+    CaseUpdateRequest,
     CreateCaseRequest,
+    Department,
     IntakeDocument,
     ParcelContext,
     RelatedPermit,
@@ -37,11 +39,22 @@ class ClaimRequest(BaseModel):
 
 
 def _related_permit(row: dict) -> RelatedPermit:
+    job = (
+        row.get("job_filing_number")
+        or row.get("job__")
+        or row.get("job_number")
+        or row.get("permit_si_no")
+        or row.get("tracking_number")
+    )
+    filing = row.get("filing_date") or row.get("issuance_date") or row.get("permit_issuance_date")
     return RelatedPermit(
-        job_number=str(row.get("job__") or row.get("job_number") or row.get("permit_si_no") or "") or None,
-        work_type=str(row.get("work_type") or row.get("job_type") or row.get("job_description") or "") or None,
-        status=str(row.get("filing_status") or row.get("permit_status") or row.get("job_status") or "") or None,
-        filing_date=str(row.get("filing_date") or row.get("filing_date") or row.get("issuance_date") or "") or None,
+        job_number=str(job or "") or None,
+        work_type=str(
+            row.get("work_type") or row.get("job_type") or row.get("job_description") or ""
+        ) or None,
+        status=str(row.get("permit_status") or row.get("filing_status") or row.get("job_status") or "")
+        or None,
+        filing_date=str(filing or "") or None,
     )
 
 
@@ -63,9 +76,11 @@ def list_cases(
     request: Request,
     q: Annotated[str | None, Query(description="Search address, BBL, BIN, owner")] = None,
     status: Annotated[str | None, Query(description="Filter by case status")] = None,
+    limit: Annotated[int, Query(ge=1, le=500, description="Max cases to return")] = 100,
+    offset: Annotated[int, Query(ge=0, description="Skip cases for pagination")] = 0,
 ) -> list[Case]:
     store = store_from_request(request)
-    return store.list_cases(query=q, status=status)
+    return store.list_cases(query=q, status=status, limit=limit, offset=offset)
 
 
 @router.get("/{case_id}")
@@ -77,16 +92,39 @@ def get_case(case_id: str, request: Request) -> Case:
     return case
 
 
-@router.get("/{case_id}/bundle")
-async def get_case_bundle(case_id: str, request: Request) -> CaseBundle:
+@router.patch("/{case_id}")
+def patch_case(
+    case_id: str,
+    body: CaseUpdateRequest,
+    request: Request,
+    current_user: Annotated[ClerkUser, Depends(get_current_user)],
+) -> Case:
     store = store_from_request(request)
-    engine = engine_from_request(request)
+    existing = store.get_case(case_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Case not found")
+    if existing.status in {CaseStatus.APPROVED, CaseStatus.CHANGES_REQUESTED}:
+        raise HTTPException(status_code=409, detail="Terminal cases cannot be edited without reopening")
+    fields = body.model_dump(exclude_unset=True)
+    updated = store.update_case(case_id, fields)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Case not found")
+    changes = ", ".join(f"{k}={fields[k]}" for k in fields if fields[k] is not None)
+    store.append_audit(
+        case_id,
+        actor=clerk_actor(current_user),
+        action="case_updated",
+        detail=f"Case details updated: {changes}",
+    )
+    return updated
+
+
+@router.get("/{case_id}/bundle")
+def get_case_bundle(case_id: str, request: Request) -> CaseBundle:
+    store = store_from_request(request)
     case = store.get_case(case_id)
     if not case:
         raise HTTPException(status_code=404, detail="Case not found")
-    related_raw = await engine.related_permits(bbl=case.bbl, bin_=case.bin)
-    parcel_raw = await engine.parcel_context(bbl=case.bbl)
-    parcel = ParcelContext(**parcel_raw) if parcel_raw else None
     return CaseBundle(
         case=case,
         distribution=store.list_distribution(case_id),
@@ -96,10 +134,41 @@ async def get_case_bundle(case_id: str, request: Request) -> CaseBundle:
         trace=store.list_trace_spans(case_id),
         observability=observability_links(case_id=case_id, project_id=gcp_project_id()),
         document=store.get_intake_document(case_id),
-        related_permits=[_related_permit(row) for row in related_raw],
-        parcel=parcel,
+        related_permits=[],
+        parcel=None,
         briefing=_briefing_from_store(store.get_briefing(case_id)),
     )
+
+
+@router.get("/{case_id}/context")
+async def get_case_context(case_id: str, request: Request):
+    store = store_from_request(request)
+    engine = engine_from_request(request)
+    case = store.get_case(case_id)
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+    cached = store.get_context_cache(case_id)
+    if cached is not None:
+        parcel = cached.get("parcel")
+        return {
+            "related_permits": cached.get("related_permits") or [],
+            "parcel": ParcelContext(**parcel) if parcel else None,
+            "cached": True,
+        }
+    related_raw = await engine.related_permits(bbl=case.bbl, bin_=case.bin)
+    parcel_raw = await engine.parcel_context(bbl=case.bbl)
+    related_models = [_related_permit(row) for row in related_raw]
+    parcel = ParcelContext(**parcel_raw) if parcel_raw else None
+    store.save_context_cache(
+        case_id,
+        related_permits=[p.model_dump(mode="json") for p in related_models],
+        parcel=parcel.model_dump(mode="json") if parcel else None,
+    )
+    return {
+        "related_permits": related_models,
+        "parcel": parcel,
+        "cached": False,
+    }
 
 
 @router.get("/{case_id}/documents/pdf")
@@ -159,12 +228,51 @@ async def refresh_distribution(
     if not case:
         raise HTTPException(status_code=404, detail="Case not found")
     runner = WorkflowRunner(store, engine)
-    await runner.run_all(case.id, bbl=case.bbl, bin_=case.bin, work_type=case.work_type)
+    completed = await runner.run_all(
+        case.id,
+        bbl=case.bbl,
+        bin_=case.bin,
+        work_type=case.work_type,
+        force=True,
+    )
+    if completed:
+        store.append_audit(
+            case_id,
+            actor=clerk_actor(current_user),
+            action="distribution_refreshed",
+            detail=f"Live NYC Open Data pull — {len(completed)} department(s) refreshed",
+        )
+    return store.list_distribution(case_id)
+
+
+@router.post("/{case_id}/distribution/refresh-bin-departments")
+async def refresh_bin_departments(
+    case_id: str,
+    request: Request,
+    current_user: Annotated[ClerkUser, Depends(get_current_user)],
+):
+    """Re-run BIN-dependent department reviews after a BIN is added or corrected."""
+    store: FirestoreStore = store_from_request(request)
+    engine: DistributionEngine = engine_from_request(request)
+    case = store.get_case(case_id)
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+    if not case.bin:
+        raise HTTPException(status_code=400, detail="BIN is required before refreshing BIN-dependent reviews")
+    runner = WorkflowRunner(store, engine)
+    departments = [Department.FIRE, Department.HOUSING, Department.BUILDING]
+    await runner.refresh_departments(
+        case.id,
+        departments,
+        bbl=case.bbl,
+        bin_=case.bin,
+        work_type=case.work_type,
+    )
     store.append_audit(
         case_id,
         actor=clerk_actor(current_user),
-        action="distribution_refreshed",
-        detail="Live NYC Open Data pull (department workflow)",
+        action="bin_departments_refreshed",
+        detail=f"Re-ran fire, housing, and building reviews for BIN {case.bin}",
     )
     return store.list_distribution(case_id)
 
@@ -212,10 +320,32 @@ def post_claim(
         actor=clerk_actor(current_user),
         action="claim_opened",
         detail=(
-            f"{body.message} — DOB NOW handoff ref {claim.notification_reference}"
+            f"{body.message} — reference {claim.notification_reference} recorded for manual DOB NOW entry"
             if claim.notification_reference
             else body.message
         ),
+    )
+    return claim
+
+
+@router.post("/{case_id}/claims/{claim_id}/mark-dob-now-sent")
+def mark_claim_dob_now_sent(
+    case_id: str,
+    claim_id: str,
+    request: Request,
+    current_user: Annotated[ClerkUser, Depends(get_current_user)],
+) -> Claim:
+    store = store_from_request(request)
+    if not store.get_case(case_id):
+        raise HTTPException(status_code=404, detail="Case not found")
+    claim = store.mark_claim_dob_now_sent(case_id, claim_id)
+    if not claim:
+        raise HTTPException(status_code=404, detail="Claim not found")
+    store.append_audit(
+        case_id,
+        actor=clerk_actor(current_user),
+        action="dob_now_marked_sent",
+        detail=f"Clerk marked DOB NOW reference {claim.notification_reference} as sent manually",
     )
     return claim
 
@@ -234,9 +364,11 @@ def respond_to_claim(
     claim = store.respond_to_claim(case_id, claim_id, body.message.strip())
     if not claim:
         raise HTTPException(status_code=404, detail="Claim not found")
+    case = store.get_case(case_id)
+    address = case.address if case else case_id[:8]
     store.create_task(
         case_id,
-        title=f"Review applicant response — {case_id[:8]}",
+        title=f"Review applicant response — {address}",
         task_type="claim_response",
         assignee=current_user.username,
     )
@@ -272,6 +404,11 @@ def post_decision(
         raise HTTPException(status_code=409, detail="This case already has a final clerk decision")
     if not body.note.strip():
         raise HTTPException(status_code=400, detail="Clerk note is required for audit")
+    if body.override and len(body.note.strip()) < 20:
+        raise HTTPException(
+            status_code=400,
+            detail="Override decisions require a clerk note of at least 20 characters",
+        )
     if body.decision == "approve":
         reviews = store.list_distribution(case_id)
         blocked = approval_block_message(

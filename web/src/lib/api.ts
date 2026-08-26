@@ -53,6 +53,7 @@ export interface Claim {
   notification_channel: string | null;
   notification_reference: string | null;
   notified_at: string | null;
+  manual_dob_now_sent: boolean;
   created_at: string;
   responded_at: string | null;
 }
@@ -231,8 +232,13 @@ export const api = {
     return res.json() as Promise<{ access_token: string; token_type: string }>;
   },
   me: () => get<ClerkProfile>("/auth/me"),
-  listTasks: (status = "open", mine = true) =>
-    get<Task[]>(`/tasks?status=${encodeURIComponent(status)}${mine ? "&mine=true" : ""}`),
+  listTasks: (status = "open", mine = false, unassigned = false) => {
+    const params = new URLSearchParams({ status });
+    if (mine) params.set("mine", "true");
+    if (unassigned) params.set("unassigned", "true");
+    return get<Task[]>(`/tasks?${params.toString()}`);
+  },
+  claimTask: (taskId: string) => post<Task>(`/tasks/${taskId}/claim`),
   listCases: (q?: string, status?: string) => {
     const params = new URLSearchParams();
     if (q?.trim()) params.set("q", q.trim());
@@ -245,12 +251,25 @@ export const api = {
       `/nyc/resolve-address?address=${encodeURIComponent(address)}&borough=${encodeURIComponent(borough)}`,
     ),
   listConditions: () => get<ConditionTemplate[]>("/config/conditions"),
+  updateCase: (id: string, patch: Partial<Pick<Case, "address" | "bbl" | "bin" | "work_type" | "owner" | "borough">>) =>
+    request<Case>(`/cases/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  getCase: (id: string) => get<Case>(`/cases/${id}`),
   getCaseBundle: (id: string) => get<CaseBundle>(`/cases/${id}/bundle`),
+  getCaseContext: (id: string) =>
+    get<{ related_permits: RelatedPermit[]; parcel: ParcelContext | null }>(`/cases/${id}/context`),
   getPlanPdf: (id: string) =>
     get<{ filename: string; content_type: string; pdf_base64: string }>(`/cases/${id}/documents/pdf`),
   refreshDistribution: (id: string) => post<DepartmentReview[]>(`/cases/${id}/distribution/refresh`),
+  refreshBinDepartments: (id: string) =>
+    post<DepartmentReview[]>(`/cases/${id}/distribution/refresh-bin-departments`),
   intake: (payload: IntakePayload) => post<Case>("/cases/intake", payload),
+  previewRedaction: (packetText: string) =>
+    post<{ redacted_text: string; findings: string[] }>("/cases/intake/preview-redaction", {
+      packet_text: packetText,
+    }),
   createClaim: (id: string, message: string) => post<Claim>(`/cases/${id}/claims`, { message }),
+  markClaimDobNowSent: (caseId: string, claimId: string) =>
+    post<Claim>(`/cases/${caseId}/claims/${claimId}/mark-dob-now-sent`),
   respondToClaim: (caseId: string, claimId: string, message: string) =>
     post<Claim>(`/cases/${caseId}/claims/${claimId}/respond`, { message }),
   decide: (id: string, decision: string, note: string, override = false) =>

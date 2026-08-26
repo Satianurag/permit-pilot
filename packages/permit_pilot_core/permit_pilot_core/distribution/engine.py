@@ -9,6 +9,7 @@ from permit_pilot_core.models import (
     EvidenceItem,
     ReviewStatus,
 )
+from permit_pilot_core.distribution.ordinance_index import citation_valid_for_department, is_known_citation
 from permit_pilot_core.socrata.client import SocrataClient
 
 BOROUGH_NAMES = {
@@ -366,6 +367,32 @@ class DistributionEngine:
     async def review_critic(self, *, reviews: list[DepartmentReview]) -> DepartmentReview:
         failures = [r for r in reviews if r.status == ReviewStatus.FAIL]
         uncited_failures = [r for r in failures if not r.citations]
+        pass_without_evidence = [
+            r
+            for r in reviews
+            if r.department != Department.CRITIC
+            and r.status == ReviewStatus.PASS
+            and not r.evidence
+        ]
+        citation_mismatches: list[str] = []
+        unknown_codes: list[str] = []
+        for review in reviews:
+            if review.department == Department.CRITIC:
+                continue
+            for citation in review.citations:
+                code = citation.code.strip()
+                if not is_known_citation(code):
+                    unknown_codes.append(f"{review.department.value}: {code}")
+                elif not citation_valid_for_department(code, review.department):
+                    citation_mismatches.append(f"{review.department.value}: {code}")
+
+        policy_evidence = EvidenceItem(
+            source="Policy check",
+            dataset_id="policy/cite-or-reject",
+            label="policy_check",
+            value="cite-or-reject",
+        )
+
         if uncited_failures:
             depts = ", ".join(r.department.value for r in uncited_failures)
             return DepartmentReview(
@@ -376,14 +403,7 @@ class DistributionEngine:
                     "Cite-or-reject policy: FAIL reviews must include ordinance citations.",
                     f"Departments missing citations: {depts}",
                 ],
-                evidence=[
-                    EvidenceItem(
-                        source="Permit Pilot Critic",
-                        dataset_id="policy/cite-or-reject",
-                        label="uncited_failures",
-                        value=len(uncited_failures),
-                    )
-                ],
+                evidence=[policy_evidence],
                 citations=[
                     Citation(
                         code="NYC Admin Code §28-105",
@@ -393,19 +413,55 @@ class DistributionEngine:
                 ],
                 updated_at=_now(),
             )
+
+        if pass_without_evidence:
+            depts = ", ".join(r.department.value for r in pass_without_evidence)
+            return DepartmentReview(
+                department=Department.CRITIC,
+                status=ReviewStatus.FAIL,
+                summary=f"Rejected PASS without supporting evidence: {depts}.",
+                findings=[
+                    "PASS reviews must cite NYC Open Data evidence rows.",
+                    f"Departments with empty evidence: {depts}",
+                ],
+                evidence=[policy_evidence],
+                citations=[
+                    Citation(
+                        code="NYC Admin Code §28-105",
+                        excerpt="Department findings must be grounded in verifiable evidence.",
+                        source_url="https://github.com/BetaNYC/nyc-charter-laws-rules",
+                    )
+                ],
+                updated_at=_now(),
+            )
+
+        if unknown_codes or citation_mismatches:
+            details = unknown_codes + citation_mismatches
+            return DepartmentReview(
+                department=Department.CRITIC,
+                status=ReviewStatus.FAIL,
+                summary="Rejected citation(s) that do not resolve in the ordinance index.",
+                findings=[
+                    "Citations must reference known NYC code sections relevant to the department.",
+                    *details,
+                ],
+                evidence=[policy_evidence],
+                citations=[
+                    Citation(
+                        code="NYC Admin Code §28-105",
+                        excerpt="Cited code sections must exist and match the reviewing department.",
+                        source_url="https://github.com/BetaNYC/nyc-charter-laws-rules",
+                    )
+                ],
+                updated_at=_now(),
+            )
+
         return DepartmentReview(
             department=Department.CRITIC,
             status=ReviewStatus.PASS,
-            summary="All failure findings include citations or no failures detected.",
+            summary="All failure findings include citations; evidence and codes validated.",
             findings=[f"Reviewed {len(reviews)} department outputs."],
-            evidence=[
-                EvidenceItem(
-                    source="Permit Pilot Critic",
-                    dataset_id="policy/cite-or-reject",
-                    label="departments_reviewed",
-                    value=len(reviews),
-                )
-            ],
+            evidence=[policy_evidence],
             updated_at=_now(),
         )
 
@@ -416,11 +472,23 @@ class DistributionEngine:
         seen: set[str] = set()
         rows: list[dict] = []
         for row in permits:
-            key = str(row.get("job__") or row.get("job_") or row.get("job_number") or row.get("permit_si_no") or "")
-            if key and key in seen:
+            key = str(
+                row.get("job_filing_number")
+                or row.get("job__")
+                or row.get("job_")
+                or row.get("job_number")
+                or row.get("permit_si_no")
+                or row.get("tracking_number")
+                or ""
+            )
+            if not key:
+                key = "|".join(
+                    str(row.get(field) or "")
+                    for field in ("work_type", "permit_status", "street_name", "house_no")
+                )
+            if key in seen:
                 continue
-            if key:
-                seen.add(key)
+            seen.add(key)
             rows.append(row)
         return rows[:25]
 
