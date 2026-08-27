@@ -27,6 +27,7 @@ from permit_pilot_api.routes import (
     nyc,
     orchestrate,
     tasks,
+    traces,
 )
 
 
@@ -69,6 +70,7 @@ app.include_router(orchestrate.router, prefix="/api")
 app.include_router(config.router, prefix="/api")
 app.include_router(dashboard.router, prefix="/api")
 app.include_router(activity.router, prefix="/api")
+app.include_router(traces.router, prefix="/api")
 app.include_router(agents.router, prefix="/api")
 app.include_router(internal.router, prefix="/api")
 

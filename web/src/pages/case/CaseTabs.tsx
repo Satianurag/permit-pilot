@@ -484,7 +484,6 @@ export function AuditTab({
         <TraceReplay
           spans={bundle.trace}
           cloudTraceUrl={bundle.observability.cloud_trace_url}
-          langfuseUrl={bundle.observability.langfuse_url}
           agentGatewayUrl={bundle.observability.agent_gateway_url}
           agentRegistryUrl={bundle.observability.agent_registry_url}
           topologyUrl={bundle.observability.topology_url}

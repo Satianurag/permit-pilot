@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import UTC, datetime
 
 from permit_pilot_core.distribution.engine import DistributionEngine
@@ -11,6 +12,8 @@ from permit_pilot_core.platform import memory as memory_bank
 from permit_pilot_core.platform import runtime
 from permit_pilot_core.platform.fleet import FLEET
 from permit_pilot_core.settings import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 def _now() -> datetime:
@@ -25,22 +28,39 @@ def init_department_steps() -> list[DepartmentStep]:
     ]
 
 
-async def run_engine_distribution(store: FirestoreStore, engine: DistributionEngine, *, case_id: str) -> list[DepartmentReview]:
+async def run_engine_distribution(
+    store: FirestoreStore,
+    engine: DistributionEngine,
+    *,
+    case_id: str,
+    trace: TraceRecorder,
+) -> list[DepartmentReview]:
     case = store.get_case(case_id)
     if not case:
         raise ValueError(f"Case not found: {case_id}")
     steps = init_department_steps()
     store.save_workflow_steps(case_id, steps)
     reviews: list[DepartmentReview] = []
-    trace = TraceRecorder(store, case_id)
-    for index, step in enumerate(steps):
+    for step in steps:
         if step.department is None:
             continue
         step.status = "running"
         step.started_at = _now()
         store.save_workflow_steps(case_id, steps)
-        with trace.span(f"department.{step.department.value}", actor=step.department.value, detail=f"Running {step.department.value}"):
-            review = await _run_department(engine, step.department, case_id=case_id, bbl=case.bbl, bin_=case.bin, work_type=case.work_type, existing=reviews)
+        with trace.span(
+            f"department.{step.department.value}",
+            actor=step.department.value,
+            detail=f"Running {step.department.value}",
+        ):
+            review = await _run_department(
+                engine,
+                step.department,
+                case_id=case_id,
+                bbl=case.bbl,
+                bin_=case.bin,
+                work_type=case.work_type,
+                existing=reviews,
+            )
         reviews.append(review)
         step.status = "completed"
         step.detail = review.summary
@@ -86,10 +106,11 @@ def invoke_orchestrator(store: FirestoreStore, *, case_id: str, user_id: str) ->
     case = store.get_case(case_id)
     if not case:
         raise ValueError(f"Case not found: {case_id}")
-    memories = []
+    memories: list[dict] = []
     try:
         memories = memory_bank.retrieve(bbl=case.bbl, query=case.work_type)
-    except Exception:
+    except Exception as exc:
+        logger.warning("Memory Bank retrieve failed for case %s: %s", case_id, exc)
         memories = []
     message = json.dumps(
         {
@@ -109,8 +130,8 @@ def invoke_orchestrator(store: FirestoreStore, *, case_id: str, user_id: str) ->
     text = runtime.extract_text(events)
     try:
         memory_bank.generate_from_session(session=f"{engine_id}/sessions/{case_id}", bbl=case.bbl)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Memory Bank generate_from_session failed for case %s: %s", case_id, exc)
     return text
 
 
@@ -122,19 +143,42 @@ async def run_distribution(
     user_id: str = "system",
 ) -> list[DepartmentReview]:
     """Run live NYC Open Data distribution, then optionally the Agent Runtime orchestrator."""
-    reviews = await run_engine_distribution(store, engine, case_id=case_id)
+    trace = TraceRecorder(store, case_id)
     settings = get_settings()
+    reviews: list[DepartmentReview] = []
+
+    with trace.span("distribution.run", actor="system", detail="NYC Open Data department distribution"):
+        reviews = await run_engine_distribution(store, engine, case_id=case_id, trace=trace)
+
     if settings.orchestrator_engine_id:
-        try:
-            briefing = invoke_orchestrator(store, case_id=case_id, user_id=user_id)
-            if briefing:
-                store.save_briefing(case_id, summary=briefing, model=settings.vertex_model, generated_by="permit_orchestrator")
-                store.append_audit(case_id, actor="permit_orchestrator", action="briefing_generated", detail=briefing[:200])
-        except Exception as exc:
-            store.append_audit(
-                case_id,
-                actor="system",
-                action="orchestrator_error",
-                detail=str(exc),
-            )
+        with trace.span(
+            "runtime.orchestrator",
+            actor="permit_orchestrator",
+            detail="Agent Runtime orchestrator briefing",
+            engine_id=settings.orchestrator_engine_id,
+        ):
+            try:
+                briefing = invoke_orchestrator(store, case_id=case_id, user_id=user_id)
+                if briefing:
+                    store.save_briefing(
+                        case_id,
+                        summary=briefing,
+                        model=settings.vertex_model,
+                        generated_by="permit_orchestrator",
+                    )
+                    store.append_audit(
+                        case_id,
+                        actor="permit_orchestrator",
+                        action="briefing_generated",
+                        detail=briefing[:200],
+                    )
+            except Exception as exc:
+                store.append_audit(
+                    case_id,
+                    actor="system",
+                    action="orchestrator_error",
+                    detail=str(exc),
+                )
+                raise
+
     return reviews

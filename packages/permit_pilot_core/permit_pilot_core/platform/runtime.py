@@ -10,12 +10,6 @@ import httpx
 from permit_pilot_core.settings import get_settings
 
 
-def _token() -> str:
-    creds, _ = default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
-    creds.refresh(Request())
-    return creds.token
-
-
 def engine_resource(engine_id: str) -> str:
     settings = get_settings()
     if engine_id.startswith("projects/"):
@@ -25,51 +19,53 @@ def engine_resource(engine_id: str) -> str:
     )
 
 
-def _query_url(engine_id: str) -> str:
-    settings = get_settings()
-    name = engine_resource(engine_id)
-    return f"https://{settings.region}-aiplatform.googleapis.com/v1/{name}:query"
+def _token() -> str:
+    creds, _ = default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+    creds.refresh(Request())
+    return creds.token
+
+
+def _headers() -> dict[str, str]:
+    return {"Authorization": f"Bearer {_token()}", "Content-Type": "application/json"}
+
+
+def _parse_stream_events(text: str) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    stripped = text.strip()
+    if not stripped:
+        return events
+    if stripped.startswith("{"):
+        try:
+            events.append(json.loads(stripped))
+            return events
+        except json.JSONDecodeError:
+            pass
+    for line in stripped.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("data:"):
+            line = line[5:].strip()
+        if line.startswith("{") and line.endswith("}"):
+            try:
+                events.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return events
 
 
 def stream_query(*, engine_id: str, user_id: str, message: str) -> list[dict[str, Any]]:
-    """Run a deployed Agent Runtime query and collect events."""
+    """Run a deployed Agent Runtime query via the streamQuery REST API."""
+    settings = get_settings()
+    name = engine_resource(engine_id)
+    url = f"https://{settings.region}-aiplatform.googleapis.com/v1/{name}:streamQuery?alt=sse"
     payload = {
         "classMethod": "stream_query",
-        "input": {
-            "user_id": user_id,
-            "message": message,
-        },
+        "input": {"user_id": user_id, "message": message},
     }
-    response = httpx.post(
-        _query_url(engine_id),
-        headers={
-            "Authorization": f"Bearer {_token()}",
-            "Content-Type": "application/json",
-        },
-        json=payload,
-        timeout=180.0,
-    )
-    if response.status_code >= 400:
-        # Alternate method name used by some Agent Engine revisions.
-        payload["classMethod"] = "async_stream_query"
-        response = httpx.post(
-            _query_url(engine_id),
-            headers={
-                "Authorization": f"Bearer {_token()}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-            timeout=180.0,
-        )
+    response = httpx.post(url, headers=_headers(), json=payload, timeout=300.0)
     response.raise_for_status()
-    body = response.json()
-    output = body.get("output") or body.get("response") or body
-    if isinstance(output, list):
-        return output
-    if isinstance(output, dict) and "output" in output:
-        inner = output["output"]
-        return inner if isinstance(inner, list) else [inner]
-    return [output]
+    return _parse_stream_events(response.text)
 
 
 def extract_text(events: list[dict[str, Any]]) -> str:
@@ -86,6 +82,9 @@ def extract_text(events: list[dict[str, Any]]) -> str:
                     chunks.append(str(part["text"]))
         elif content:
             chunks.append(str(content))
+        text = event.get("text")
+        if text and not content:
+            chunks.append(str(text))
     return "\n".join(chunks).strip()
 
 

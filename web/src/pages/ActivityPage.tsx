@@ -36,7 +36,7 @@ export default function ActivityPage() {
     <div className="space-y-6">
       <PageHeader
         title="Recent activity"
-        subtitle="Cross-case audit trail from Firestore — every clerk action, fleet enqueue, and distribution event. Per-case trace replay stays on each dossier's Audit tab."
+        subtitle="Cross-case audit trail from Firestore — clerk actions, fleet enqueue, and distribution events. Agent run spans and Vertex reasoning chains live under Traces."
         action={
           <button type="button" className="pp-btn-secondary" onClick={() => void query.refetch()} disabled={query.isFetching}>
             Refresh

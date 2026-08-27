@@ -150,7 +150,12 @@ def main() -> None:
                     "VERTEX_MODEL": settings.vertex_model,
                     "GOOGLE_GENAI_USE_VERTEXAI": "true",
                     "MCP_TOOLS_URL": mcp_url,
+                    "MCP_INVOKER_SERVICE_ACCOUNT": f"permit-pilot-api@{settings.project_id}.iam.gserviceaccount.com",
+                    "GOOGLE_API_USE_CLIENT_CERTIFICATE": "false",
                     "GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES": "false",
+                    "GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY": "true",
+                    "OTEL_SEMCONV_STABILITY_OPT_IN": "gen_ai_latest_experimental",
+                    "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
                 }
             ).items()
             if value

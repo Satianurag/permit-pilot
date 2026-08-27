@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import time
 import uuid
 from contextlib import contextmanager
@@ -29,16 +28,17 @@ def _now() -> datetime:
 
 
 class TraceRecorder:
-    """Spans mirrored to Firestore for Audit UI; OTel → Cloud Trace; optional Langfuse."""
+    """Spans mirrored to Firestore for Audit UI; OTel spans export to Cloud Trace on Cloud Run."""
 
     def __init__(self, store, case_id: str) -> None:
         self._store = store
         self._case_id = case_id
+        self._parent_stack: list[str] = []
         try:
             from opentelemetry import trace
 
             self._otel = trace.get_tracer("permit-pilot")
-        except Exception:
+        except ImportError:
             self._otel = None
 
     def record(
@@ -49,6 +49,7 @@ class TraceRecorder:
         *,
         status: str = "ok",
         parent_id: str | None = None,
+        span_id: str | None = None,
         attributes: dict[str, str] | None = None,
         started_at: datetime | None = None,
         ended_at: datetime | None = None,
@@ -57,7 +58,7 @@ class TraceRecorder:
         start = started_at or _now()
         end = ended_at or _now()
         span = TraceSpan(
-            id=str(uuid.uuid4()),
+            id=span_id or str(uuid.uuid4()),
             case_id=self._case_id,
             name=name,
             actor=actor,
@@ -70,51 +71,13 @@ class TraceRecorder:
             attributes=attributes or {},
         )
         self._store.append_trace_span(span)
-        self._export_langfuse(span)
         return span
-
-    def _export_langfuse(self, span: TraceSpan) -> None:
-        host = os.environ.get("LANGFUSE_HOST")
-        public_key = os.environ.get("LANGFUSE_PUBLIC_KEY")
-        secret_key = os.environ.get("LANGFUSE_SECRET_KEY")
-        if not (host and public_key and secret_key):
-            return
-        try:
-            import httpx
-
-            httpx.post(
-                f"{host.rstrip('/')}/api/public/ingestion",
-                auth=(public_key, secret_key),
-                json={
-                    "batch": [
-                        {
-                            "type": "trace-create",
-                            "body": {
-                                "id": span.id,
-                                "name": span.name,
-                                "metadata": {"case_id": span.case_id, **span.attributes},
-                            },
-                        },
-                        {
-                            "type": "span-create",
-                            "body": {
-                                "id": span.id,
-                                "traceId": span.id,
-                                "name": span.name,
-                                "startTime": span.started_at.isoformat(),
-                                "endTime": (span.ended_at or span.started_at).isoformat(),
-                                "metadata": {"actor": span.actor, "detail": span.detail},
-                            },
-                        },
-                    ]
-                },
-                timeout=5.0,
-            )
-        except Exception:
-            pass
 
     @contextmanager
     def span(self, name: str, actor: str, detail: str = "", **attrs: str) -> Iterator[None]:
+        parent_id = self._parent_stack[-1] if self._parent_stack else None
+        span_id = str(uuid.uuid4())
+        self._parent_stack.append(span_id)
         start = _now()
         t0 = time.perf_counter()
         status = "ok"
@@ -124,6 +87,9 @@ class TraceRecorder:
                 with self._otel.start_as_current_span(name) as otel_span:
                     otel_span.set_attribute("case_id", self._case_id)
                     otel_span.set_attribute("actor", actor)
+                    otel_span.set_attribute("span_id", span_id)
+                    if parent_id:
+                        otel_span.set_attribute("parent_span_id", parent_id)
                     for key, value in attrs.items():
                         otel_span.set_attribute(key, value)
                     yield
@@ -134,6 +100,7 @@ class TraceRecorder:
             final_detail = detail or str(exc)
             raise
         finally:
+            self._parent_stack.pop()
             end = _now()
             ms = int((time.perf_counter() - t0) * 1000)
             self.record(
@@ -141,6 +108,8 @@ class TraceRecorder:
                 actor,
                 final_detail,
                 status=status,
+                parent_id=parent_id,
+                span_id=span_id,
                 started_at=start,
                 ended_at=end,
                 duration_ms=ms,

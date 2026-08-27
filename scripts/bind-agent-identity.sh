@@ -6,7 +6,7 @@ PROJECT="${GOOGLE_CLOUD_PROJECT:?Set GOOGLE_CLOUD_PROJECT}"
 REGION="${GOOGLE_CLOUD_LOCATION:-us-central1}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 export PYTHONPATH="${ROOT}/packages/permit_pilot_core"
-exec python3 - "$ROOT" "$PROJECT" "$REGION" <<'PY'
+exec "${ROOT}/.venv/bin/python" - "$ROOT" "$PROJECT" "$REGION" <<'PY'
 from __future__ import annotations
 
 import json
@@ -176,6 +176,22 @@ for spec in FLEET:
     principal = principals[spec.name]
     row["iap_principal"] = principal
     row["runtime_identity"] = principal
+    agents = json.loads(
+        gcloud(
+            "agent-registry",
+            "agents",
+            "list",
+            f"--location={region}",
+            f"--project={project}",
+            json_out=True,
+        )
+    )
+    for item in agents:
+        if (item.get("displayName") or "") == spec.name:
+            uid = item.get("uid") or (item.get("name") or "").rsplit("/", 1)[-1]
+            if uid:
+                row["registry_agent_uid"] = uid
+            break
     existing[spec.name] = row
 ident_path.write_text(json.dumps(existing, indent=2) + "\n")
 

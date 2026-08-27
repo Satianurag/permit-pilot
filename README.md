@@ -71,7 +71,7 @@ Reference BBLs live in `packages/permit_pilot_core/permit_pilot_core/seeds.py` (
 | Tools | Permit Tools MCP on Cloud Run, registered in Agent Registry |
 | Async | Cloud Tasks queue `permit-pilot-distribution` + Eventarc on Firestore claims |
 | Memory | Memory Bank scoped `{"bbl": "..."}` |
-| Observability | OpenTelemetry → Cloud Trace; Fleet / Governance / Traces consoles |
+| Observability | OpenTelemetry → Cloud Trace; in-app run history on Traces; Vertex Agent Observability for LLM/tool DAG |
 
 ---
 
@@ -156,7 +156,7 @@ All routes are under `/api`:
 3. **Parcel memory** — BBL `3014930048` retrieves Memory Bank facts.
 4. Intake or **Run Agent Runtime fleet** on a case — Cloud Tasks 200, distribution fills from NYC Open Data.
 5. Open a department row — evidence cites live dataset IDs (`64uk-42ks`, `skr7-cxt3`, …).
-6. **Traces** / Audit tab — Cloud Trace and Agent Gateway console links.
+6. **Traces** — in-app run history with nested department spans; open Agent Observability for orchestrator LLM/tool DAG.
 7. Optional: revoke zoning’s IAP binding and re-run fleet — `lookup_pluto` is denied at the gateway.
 
 ---

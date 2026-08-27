@@ -791,3 +791,41 @@ class FirestoreStore:
             for event in self.list_audit(case.id):
                 seen.add(event.action)
         return sorted(seen)
+
+    def list_recent_traces(self, *, limit: int = 20) -> tuple[list[Any], int]:
+        from permit_pilot_core.models import TraceRunSummary
+
+        runs: list[TraceRunSummary] = []
+        for case in self.list_cases(limit=500):
+            spans = self.list_trace_spans(case.id)
+            if not spans:
+                continue
+            roots = [span for span in spans if span.name == "distribution.run"]
+            if not roots:
+                roots = [span for span in spans if span.parent_id is None]
+            if not roots:
+                continue
+            root = max(roots, key=lambda span: span.started_at)
+            ended_candidates = [span.ended_at or span.started_at for span in spans]
+            ended_at = max(ended_candidates) if ended_candidates else root.ended_at
+            status = "error" if any(span.status == "error" for span in spans) else root.status
+            total_ms = sum(span.duration_ms or 0 for span in spans)
+            runs.append(
+                TraceRunSummary(
+                    case_id=case.id,
+                    address=case.address,
+                    root_span_id=root.id,
+                    root_name=root.name,
+                    status=status,
+                    span_count=len(spans),
+                    started_at=root.started_at,
+                    ended_at=ended_at,
+                    duration_ms=total_ms or root.duration_ms,
+                    spans=spans,
+                )
+            )
+        runs.sort(key=lambda run: run.started_at, reverse=True)
+        total = len(runs)
+        if limit > 0:
+            runs = runs[:limit]
+        return runs, total

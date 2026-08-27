@@ -130,6 +130,35 @@ export interface TraceSpan {
   attributes: Record<string, string>;
 }
 
+export interface TraceRunSummary {
+  case_id: string;
+  address: string;
+  root_span_id: string;
+  root_name: string;
+  status: string;
+  span_count: number;
+  started_at: string;
+  ended_at: string | null;
+  duration_ms: number | null;
+  spans: TraceSpan[];
+}
+
+export interface TraceFeed {
+  runs: TraceRunSummary[];
+  total: number;
+  observability: ObservabilityLinks;
+}
+
+export interface ObservabilityLinks {
+  cloud_trace_url: string | null;
+  agent_gateway_url?: string | null;
+  agent_registry_url?: string | null;
+  model_armor_url?: string | null;
+  topology_url?: string | null;
+  agent_observability_url?: string | null;
+  case_id?: string | null;
+}
+
 export interface IntakePayload {
   address: string;
   bbl: string;
@@ -161,16 +190,7 @@ export interface CaseBundle {
   audit: AuditEvent[];
   workflow: WorkflowStep[];
   trace: TraceSpan[];
-  observability: {
-    cloud_trace_url: string | null;
-    langfuse_url: string | null;
-    gcp_workflows_url: string | null;
-    agent_gateway_url?: string | null;
-    agent_registry_url?: string | null;
-    model_armor_url?: string | null;
-    topology_url?: string | null;
-    agent_observability_url?: string | null;
-  };
+  observability: ObservabilityLinks;
   document: IntakeDocument | null;
   related_permits: RelatedPermit[];
   parcel: ParcelContext | null;
@@ -353,6 +373,7 @@ export const api = {
     ),
   inspectArmor: (text: string) => post<{ blocked: boolean; findings: string[] }>("/armor/inspect", { text }),
   getObservability: (caseId?: string) =>
-    get<Record<string, string | null>>(`/config/observability${caseId ? `?case_id=${encodeURIComponent(caseId)}` : ""}`),
+    get<ObservabilityLinks>(`/config/observability${caseId ? `?case_id=${encodeURIComponent(caseId)}` : ""}`),
+  listTraces: (limit = 20) => get<TraceFeed>(`/traces?limit=${limit}`),
   consumeReturnPath,
 };

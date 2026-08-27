@@ -249,3 +249,22 @@ class ActivityFeed(BaseModel):
     limit: int
     offset: int
     actions: list[str] = Field(default_factory=list)
+
+
+class TraceRunSummary(BaseModel):
+    case_id: str
+    address: str
+    root_span_id: str
+    root_name: str
+    status: str
+    span_count: int
+    started_at: datetime
+    ended_at: datetime | None = None
+    duration_ms: int | None = None
+    spans: list[Any] = Field(default_factory=list)
+
+
+class TraceFeed(BaseModel):
+    runs: list[TraceRunSummary]
+    total: int
+    observability: dict[str, str | None]

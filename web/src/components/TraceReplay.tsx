@@ -4,12 +4,11 @@ import EmptyState from "./EmptyState";
 interface Props {
   spans: TraceSpan[];
   cloudTraceUrl?: string | null;
-  langfuseUrl?: string | null;
-  gcpWorkflowsUrl?: string | null;
   agentGatewayUrl?: string | null;
   agentRegistryUrl?: string | null;
   topologyUrl?: string | null;
   agentObservabilityUrl?: string | null;
+  showConsoleLinks?: boolean;
 }
 
 function formatWhen(value: string): string {
@@ -54,18 +53,17 @@ function SpanNode({ span, spans, depth = 0 }: { span: TraceSpan; spans: TraceSpa
 export default function TraceReplay({
   spans,
   cloudTraceUrl,
-  langfuseUrl,
-  gcpWorkflowsUrl,
   agentGatewayUrl,
   agentRegistryUrl,
   topologyUrl,
   agentObservabilityUrl,
+  showConsoleLinks = true,
 }: Props) {
   if (spans.length === 0) {
     return (
       <EmptyState
         title="No activity recorded yet"
-        description="Department and briefing spans appear here after distribution runs."
+        description="Department and orchestrator spans appear here after distribution runs."
       />
     );
   }
@@ -74,48 +72,40 @@ export default function TraceReplay({
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap gap-3 text-sm">
-        {cloudTraceUrl && (
-          <a href={cloudTraceUrl} target="_blank" rel="noreferrer noopener" className="text-pp-accent hover:underline">
-            Open in Cloud Trace (new tab)
-          </a>
-        )}
-        {langfuseUrl && (
-          <a href={langfuseUrl} target="_blank" rel="noreferrer noopener" className="text-pp-accent hover:underline">
-            Open in Langfuse (new tab)
-          </a>
-        )}
-        {agentGatewayUrl && (
-          <a href={agentGatewayUrl} target="_blank" rel="noreferrer noopener" className="text-pp-accent hover:underline">
-            Open Agent Gateway (new tab)
-          </a>
-        )}
-        {agentRegistryUrl && (
-          <a href={agentRegistryUrl} target="_blank" rel="noreferrer noopener" className="text-pp-accent hover:underline">
-            Open Agent Registry (new tab)
-          </a>
-        )}
-        {topologyUrl && (
-          <a href={topologyUrl} target="_blank" rel="noreferrer noopener" className="text-pp-accent hover:underline">
-            Open App Topology (new tab)
-          </a>
-        )}
-        {agentObservabilityUrl && (
-          <a href={agentObservabilityUrl} target="_blank" rel="noreferrer noopener" className="text-pp-accent hover:underline">
-            Open Agent Observability (new tab)
-          </a>
-        )}
-        {gcpWorkflowsUrl && (
-          <a
-            href={gcpWorkflowsUrl}
-            target="_blank"
-            rel="noreferrer noopener"
-            className="text-pp-accent hover:underline"
-          >
-            Open in Cloud Workflows (new tab)
-          </a>
-        )}
-      </div>
+      {showConsoleLinks && (
+        <div className="flex flex-wrap gap-3 text-sm">
+          {cloudTraceUrl && (
+            <a href={cloudTraceUrl} target="_blank" rel="noreferrer noopener" className="text-pp-accent hover:underline">
+              Open in Cloud Trace (new tab)
+            </a>
+          )}
+          {agentObservabilityUrl && (
+            <a
+              href={agentObservabilityUrl}
+              target="_blank"
+              rel="noreferrer noopener"
+              className="text-pp-accent hover:underline"
+            >
+              Open Agent Observability (new tab)
+            </a>
+          )}
+          {agentGatewayUrl && (
+            <a href={agentGatewayUrl} target="_blank" rel="noreferrer noopener" className="text-pp-accent hover:underline">
+              Open Agent Gateway (new tab)
+            </a>
+          )}
+          {agentRegistryUrl && (
+            <a href={agentRegistryUrl} target="_blank" rel="noreferrer noopener" className="text-pp-accent hover:underline">
+              Open Agent Registry (new tab)
+            </a>
+          )}
+          {topologyUrl && (
+            <a href={topologyUrl} target="_blank" rel="noreferrer noopener" className="text-pp-accent hover:underline">
+              Open App Topology (new tab)
+            </a>
+          )}
+        </div>
+      )}
       <ol className="relative border-l border-pp-border ml-3 space-y-4">
         {roots.map((span) => (
           <li key={span.id} className="relative">

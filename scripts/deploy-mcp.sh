@@ -35,4 +35,8 @@ gcloud run services add-iam-policy-binding "$SERVICE" \
   --member="serviceAccount:permit-pilot-api@${PROJECT}.iam.gserviceaccount.com" \
   --role="roles/run.invoker" --quiet >/dev/null
 
+if [ -f "$ROOT/.agent-identities.json" ] || [ -f "$ROOT/.agent-engines.json" ]; then
+  "$ROOT/scripts/bind-mcp-invoker.sh"
+fi
+
 echo "MCP_TOOLS_URL=$URL"

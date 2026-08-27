@@ -103,6 +103,14 @@ d=json.load(sys.stdin)
 assert d.get('cloud_trace_url')
 assert d.get('agent_gateway_url')
 assert d.get('agent_observability_url')
+assert 'langfuse_url' not in d
+"
+curl -fsS "${AUTH[@]}" "$BASE/api/traces?limit=5" | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+assert isinstance(d.get('runs'), list), d
+assert 'total' in d
+assert d.get('observability', {}).get('cloud_trace_url')
 "
 
 echo "=== 11. Clerk briefing ==="

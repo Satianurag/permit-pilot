@@ -22,7 +22,7 @@ const TOPBAR_COPY: Record<string, { kicker: string; title: string }> = {
   "/agents": { kicker: "Agent Platform", title: "Fleet · Agent Registry and SPIFFE identities" },
   "/governance": { kicker: "Agent Platform", title: "Governance · gateway, IAP, Model Armor" },
   "/memory": { kicker: "Agent Platform", title: "Parcel memory · Memory Bank by BBL" },
-  "/traces": { kicker: "Agent Platform", title: "Traces · Cloud Trace and App Topology" },
+  "/traces": { kicker: "Agent Platform", title: "Traces · Agent Observability and run history" },
 };
 
 function topbarCopy(pathname: string) {
