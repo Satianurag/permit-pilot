@@ -3,19 +3,17 @@
 from __future__ import annotations
 
 import logging
-import os
 import time
 
 from google.cloud import firestore
 
-_log = logging.getLogger("permit_pilot.auth")
+from permit_pilot_core.settings import get_settings
 
-_WINDOW_SECONDS = 900
-_MAX_FAILURES = 10
+_log = logging.getLogger("permit_pilot.auth")
 
 
 def _db() -> firestore.Client:
-    return firestore.Client(project=os.environ.get("GOOGLE_CLOUD_PROJECT"))
+    return firestore.Client(project=get_settings().project_id)
 
 
 def _doc_ref(username: str) -> firestore.DocumentReference:
@@ -25,7 +23,8 @@ def _doc_ref(username: str) -> firestore.DocumentReference:
 
 def _recent_timestamps(raw: list[float] | None) -> list[float]:
     now = time.time()
-    return [t for t in (raw or []) if now - t < _WINDOW_SECONDS]
+    window = get_settings().login_window_seconds
+    return [t for t in (raw or []) if now - t < window]
 
 
 def record_failed_login(username: str) -> None:
@@ -52,7 +51,7 @@ def is_login_locked(username: str) -> bool:
     if not snap.exists:
         return False
     recent = _recent_timestamps(snap.to_dict().get("timestamps"))
-    return len(recent) >= _MAX_FAILURES
+    return len(recent) >= get_settings().login_max_failures
 
 
 def clear_failures(username: str) -> None:

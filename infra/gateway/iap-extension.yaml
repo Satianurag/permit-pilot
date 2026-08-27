@@ -1,0 +1,7 @@
+name: permit-pilot-iap
+service: iap.googleapis.com
+failOpen: false
+timeout: 2s
+metadata:
+  iamEnforcementMode: "DRY_RUN"
+  iapPolicyVersion: "V1"

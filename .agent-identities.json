@@ -1,0 +1,74 @@
+{
+  "zoning_agent": {
+    "engine_id": "501242612091453440",
+    "resource_name": "projects/538666547847/locations/us-central1/reasoningEngines/501242612091453440",
+    "effective_identity": "agents.global.project-538666547847.system.id.goog/resources/aiplatform/projects/538666547847/locations/us-central1/reasoningEngines/501242612091453440",
+    "identity_type": "AGENT_IDENTITY",
+    "spiffe": "agents.global.project-538666547847.system.id.goog/resources/aiplatform/projects/538666547847/locations/us-central1/reasoningEngines/501242612091453440",
+    "iap_principal": "principal://agents.global.proj-538666547847.system.id.goog/resources/aiplatform/projects/538666547847/locations/us-central1/reasoningEngines/501242612091453440",
+    "runtime_identity": "principal://agents.global.proj-538666547847.system.id.goog/resources/aiplatform/projects/538666547847/locations/us-central1/reasoningEngines/501242612091453440"
+  },
+  "building_agent": {
+    "engine_id": "5112928630518841344",
+    "resource_name": "projects/gen-lang-client-0233250350/locations/us-central1/reasoningEngines/5112928630518841344",
+    "effective_identity": "agents.global.project-538666547847.system.id.goog/resources/aiplatform/projects/538666547847/locations/us-central1/reasoningEngines/5112928630518841344",
+    "identity_type": "AGENT_IDENTITY",
+    "spiffe": "agents.global.project-538666547847.system.id.goog/resources/aiplatform/projects/538666547847/locations/us-central1/reasoningEngines/5112928630518841344",
+    "iap_principal": "principal://agents.global.proj-538666547847.system.id.goog/resources/aiplatform/projects/538666547847/locations/us-central1/reasoningEngines/5112928630518841344",
+    "runtime_identity": "principal://agents.global.proj-538666547847.system.id.goog/resources/aiplatform/projects/538666547847/locations/us-central1/reasoningEngines/5112928630518841344"
+  },
+  "fire_agent": {
+    "engine_id": "1494286329926647808",
+    "resource_name": "projects/gen-lang-client-0233250350/locations/us-central1/reasoningEngines/1494286329926647808",
+    "effective_identity": "agents.global.project-538666547847.system.id.goog/resources/aiplatform/projects/538666547847/locations/us-central1/reasoningEngines/1494286329926647808",
+    "identity_type": "AGENT_IDENTITY",
+    "spiffe": "agents.global.project-538666547847.system.id.goog/resources/aiplatform/projects/538666547847/locations/us-central1/reasoningEngines/1494286329926647808",
+    "iap_principal": "principal://agents.global.proj-538666547847.system.id.goog/resources/aiplatform/projects/538666547847/locations/us-central1/reasoningEngines/1494286329926647808",
+    "runtime_identity": "principal://agents.global.proj-538666547847.system.id.goog/resources/aiplatform/projects/538666547847/locations/us-central1/reasoningEngines/1494286329926647808"
+  },
+  "utilities_agent": {
+    "engine_id": "2097768679994294272",
+    "resource_name": "projects/gen-lang-client-0233250350/locations/us-central1/reasoningEngines/2097768679994294272",
+    "effective_identity": "agents.global.project-538666547847.system.id.goog/resources/aiplatform/projects/538666547847/locations/us-central1/reasoningEngines/2097768679994294272",
+    "identity_type": "AGENT_IDENTITY",
+    "spiffe": "agents.global.project-538666547847.system.id.goog/resources/aiplatform/projects/538666547847/locations/us-central1/reasoningEngines/2097768679994294272",
+    "iap_principal": "principal://agents.global.proj-538666547847.system.id.goog/resources/aiplatform/projects/538666547847/locations/us-central1/reasoningEngines/2097768679994294272",
+    "runtime_identity": "principal://agents.global.proj-538666547847.system.id.goog/resources/aiplatform/projects/538666547847/locations/us-central1/reasoningEngines/2097768679994294272"
+  },
+  "landmarks_agent": {
+    "engine_id": "4072034166642835456",
+    "resource_name": "projects/gen-lang-client-0233250350/locations/us-central1/reasoningEngines/4072034166642835456",
+    "effective_identity": "agents.global.project-538666547847.system.id.goog/resources/aiplatform/projects/538666547847/locations/us-central1/reasoningEngines/4072034166642835456",
+    "identity_type": "AGENT_IDENTITY",
+    "spiffe": "agents.global.project-538666547847.system.id.goog/resources/aiplatform/projects/538666547847/locations/us-central1/reasoningEngines/4072034166642835456",
+    "iap_principal": "principal://agents.global.proj-538666547847.system.id.goog/resources/aiplatform/projects/538666547847/locations/us-central1/reasoningEngines/4072034166642835456",
+    "runtime_identity": "principal://agents.global.proj-538666547847.system.id.goog/resources/aiplatform/projects/538666547847/locations/us-central1/reasoningEngines/4072034166642835456"
+  },
+  "housing_agent": {
+    "engine_id": "8197331425314209792",
+    "resource_name": "projects/gen-lang-client-0233250350/locations/us-central1/reasoningEngines/8197331425314209792",
+    "effective_identity": "agents.global.project-538666547847.system.id.goog/resources/aiplatform/projects/538666547847/locations/us-central1/reasoningEngines/8197331425314209792",
+    "identity_type": "AGENT_IDENTITY",
+    "spiffe": "agents.global.project-538666547847.system.id.goog/resources/aiplatform/projects/538666547847/locations/us-central1/reasoningEngines/8197331425314209792",
+    "iap_principal": "principal://agents.global.proj-538666547847.system.id.goog/resources/aiplatform/projects/538666547847/locations/us-central1/reasoningEngines/8197331425314209792",
+    "runtime_identity": "principal://agents.global.proj-538666547847.system.id.goog/resources/aiplatform/projects/538666547847/locations/us-central1/reasoningEngines/8197331425314209792"
+  },
+  "critic_agent": {
+    "engine_id": "9125072948552531968",
+    "resource_name": "projects/gen-lang-client-0233250350/locations/us-central1/reasoningEngines/9125072948552531968",
+    "effective_identity": "agents.global.project-538666547847.system.id.goog/resources/aiplatform/projects/538666547847/locations/us-central1/reasoningEngines/9125072948552531968",
+    "identity_type": "AGENT_IDENTITY",
+    "spiffe": "agents.global.project-538666547847.system.id.goog/resources/aiplatform/projects/538666547847/locations/us-central1/reasoningEngines/9125072948552531968",
+    "iap_principal": "principal://agents.global.proj-538666547847.system.id.goog/resources/aiplatform/projects/538666547847/locations/us-central1/reasoningEngines/9125072948552531968",
+    "runtime_identity": "principal://agents.global.proj-538666547847.system.id.goog/resources/aiplatform/projects/538666547847/locations/us-central1/reasoningEngines/9125072948552531968"
+  },
+  "permit_orchestrator": {
+    "engine_id": "3804069988814290944",
+    "resource_name": "projects/gen-lang-client-0233250350/locations/us-central1/reasoningEngines/3804069988814290944",
+    "effective_identity": "agents.global.project-538666547847.system.id.goog/resources/aiplatform/projects/538666547847/locations/us-central1/reasoningEngines/3804069988814290944",
+    "identity_type": "AGENT_IDENTITY",
+    "spiffe": "agents.global.project-538666547847.system.id.goog/resources/aiplatform/projects/538666547847/locations/us-central1/reasoningEngines/3804069988814290944",
+    "iap_principal": "principal://agents.global.proj-538666547847.system.id.goog/resources/aiplatform/projects/538666547847/locations/us-central1/reasoningEngines/3804069988814290944",
+    "runtime_identity": "principal://agents.global.proj-538666547847.system.id.goog/resources/aiplatform/projects/538666547847/locations/us-central1/reasoningEngines/3804069988814290944"
+  }
+}

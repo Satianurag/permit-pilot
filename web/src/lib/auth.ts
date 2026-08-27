@@ -39,7 +39,3 @@ export function isAuthenticated(): boolean {
   return Boolean(getToken());
 }
 
-export function isAdmin(user: ClerkProfile | null): boolean {
-  return user?.role === "admin";
-}
-

@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import EmptyState from "../components/EmptyState";
 import PageHeader from "../components/PageHeader";
 import Skeleton from "../components/Skeleton";
 import { StatusBadge } from "../components/StatusBadge";
-import { api, Case } from "../lib/api";
+import { api } from "../lib/api";
 import { errorMessage } from "../lib/errors";
 import { useDebouncedValue } from "../lib/useDebouncedValue";
 
@@ -23,9 +24,6 @@ export default function DossiersPage() {
   const urlStatus = params.get("status") ?? "";
   const [draft, setDraft] = useState(urlQuery);
   const debounced = useDebouncedValue(draft, 300);
-  const [cases, setCases] = useState<Case[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (debounced === urlQuery) return;
@@ -36,15 +34,6 @@ export default function DossiersPage() {
   }, [debounced, params, setParams, urlQuery]);
 
   useEffect(() => {
-    setLoading(true);
-    api
-      .listCases(urlQuery.trim() || undefined, urlStatus || undefined)
-      .then(setCases)
-      .catch((err: Error) => setError(err.message))
-      .finally(() => setLoading(false));
-  }, [urlQuery, urlStatus]);
-
-  useEffect(() => {
     const onPop = () => {
       const next = new URLSearchParams(window.location.search);
       setDraft(next.get("q") ?? "");
@@ -53,12 +42,19 @@ export default function DossiersPage() {
     return () => window.removeEventListener("popstate", onPop);
   }, []);
 
+  const query = useQuery({
+    queryKey: ["cases", urlQuery, urlStatus],
+    queryFn: () => api.listCases(urlQuery.trim() || undefined, urlStatus || undefined),
+  });
+
   const setStatus = (status: string) => {
     const next = new URLSearchParams(params);
     if (status) next.set("status", status);
     else next.delete("status");
     setParams(next, { replace: true });
   };
+
+  const cases = query.data ?? [];
 
   return (
     <div className="space-y-6">
@@ -91,12 +87,12 @@ export default function DossiersPage() {
         </div>
       </div>
 
-      {error && (
+      {query.error && (
         <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-xl p-3" role="alert">
-          {errorMessage(error)}
+          {errorMessage(query.error)}
         </p>
       )}
-      {loading ? (
+      {query.isLoading ? (
         <Skeleton rows={6} label="Loading permits" />
       ) : cases.length === 0 ? (
         <EmptyState title="No permits match your search" description="Try a different address, BBL, BIN, or status." />

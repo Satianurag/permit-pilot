@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import EmptyState from "../components/EmptyState";
 import IntakeModal from "../components/IntakeModal";
 import PageHeader from "../components/PageHeader";
@@ -11,6 +12,7 @@ import { errorMessage } from "../lib/errors";
 import { formatStatus } from "../lib/formatStatus";
 import { getStoredUser } from "../lib/auth";
 import { clockClass, reviewClock } from "../lib/reviewClock";
+import { useInvalidateCase } from "../lib/useCaseBundle";
 
 const FILTERS = [
   { id: "open", label: "Open" },
@@ -26,6 +28,7 @@ const ASSIGN_FILTERS = [
 
 export default function TasksPage() {
   const { push } = useToast();
+  const invalidate = useInvalidateCase();
   const [params, setParams] = useSearchParams();
   const rawStatus = params.get("status");
   const filter: (typeof FILTERS)[number]["id"] =
@@ -33,12 +36,20 @@ export default function TasksPage() {
   const rawAssign = params.get("assign");
   const assignFilter: (typeof ASSIGN_FILTERS)[number]["id"] =
     rawAssign === "mine" || rawAssign === "unassigned" ? rawAssign : "all";
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
   const [intakeOpen, setIntakeOpen] = useState(false);
-  const [claimingId, setClaimingId] = useState<string | null>(null);
   const currentUser = getStoredUser();
+  const query = useQuery({
+    queryKey: ["tasks", filter, assignFilter],
+    queryFn: () => api.listTasks(filter, assignFilter === "mine", assignFilter === "unassigned"),
+  });
+  const claim = useMutation({
+    mutationFn: (task: Task) => api.claimTask(task.id),
+    onSuccess: async () => {
+      push("Task assigned to you.", "success");
+      await invalidate();
+    },
+    onError: (err) => push(errorMessage(err), "error"),
+  });
 
   const setFilter = (id: (typeof FILTERS)[number]["id"]) => {
     const next = new URLSearchParams(params);
@@ -54,34 +65,12 @@ export default function TasksPage() {
     setParams(next, { replace: true });
   };
 
-  const load = (status: string, assign: (typeof ASSIGN_FILTERS)[number]["id"]) => {
-    setLoading(true);
-    api
-      .listTasks(status, assign === "mine", assign === "unassigned")
-      .then(setTasks)
-      .catch((err: Error) => setError(err.message))
-      .finally(() => setLoading(false));
-  };
-
-  useEffect(() => load(filter, assignFilter), [filter, assignFilter]);
-
-  const claimTask = async (task: Task) => {
-    setClaimingId(task.id);
-    try {
-      await api.claimTask(task.id);
-      push("Task assigned to you.", "success");
-      load(filter, assignFilter);
-    } catch (err) {
-      push(errorMessage(err), "error");
-    } finally {
-      setClaimingId(null);
-    }
-  };
-
   const sorted = useMemo(
     () =>
-      [...tasks].sort((a, b) => reviewClock(a.created_at).due.getTime() - reviewClock(b.created_at).due.getTime()),
-    [tasks],
+      [...(query.data ?? [])].sort(
+        (a, b) => reviewClock(a.created_at).due.getTime() - reviewClock(b.created_at).due.getTime(),
+      ),
+    [query.data],
   );
 
   const overdueCount = sorted.filter((task) => reviewClock(task.created_at).kind === "overdue" && task.status === "open")
@@ -131,12 +120,12 @@ export default function TasksPage() {
         )}
       </div>
 
-      {error && (
+      {query.error && (
         <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-xl p-3" role="alert">
-          {errorMessage(error)}
+          {errorMessage(query.error)}
         </p>
       )}
-      {loading ? (
+      {query.isLoading ? (
         <Skeleton rows={6} label="Loading tasks" />
       ) : sorted.length === 0 ? (
         <EmptyState
@@ -166,8 +155,7 @@ export default function TasksPage() {
               {sorted.map((task) => {
                 const clock = reviewClock(task.created_at);
                 const canClaim =
-                  task.status === "open" &&
-                  (!task.assignee || task.assignee !== currentUser?.username);
+                  task.status === "open" && (!task.assignee || task.assignee !== currentUser?.username);
                 return (
                   <tr key={task.id} className="relative">
                     <td>
@@ -190,11 +178,11 @@ export default function TasksPage() {
                       {canClaim && (
                         <button
                           type="button"
-                          disabled={claimingId === task.id}
-                          onClick={() => void claimTask(task)}
+                          disabled={claim.isPending && claim.variables?.id === task.id}
+                          onClick={() => claim.mutate(task)}
                           className="text-sm font-medium text-pp-accent hover:underline disabled:opacity-50"
                         >
-                          {claimingId === task.id ? "Claiming…" : "Claim"}
+                          {claim.isPending && claim.variables?.id === task.id ? "Claiming…" : "Claim"}
                         </button>
                       )}
                     </td>
@@ -205,7 +193,7 @@ export default function TasksPage() {
           </table>
         </div>
       )}
-      <IntakeModal open={intakeOpen} onClose={() => setIntakeOpen(false)} onCreated={() => load(filter, assignFilter)} />
+      <IntakeModal open={intakeOpen} onClose={() => setIntakeOpen(false)} />
     </div>
   );
 }

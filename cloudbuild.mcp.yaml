@@ -1,0 +1,7 @@
+substitutions:
+  _IMAGE: us-central1-docker.pkg.dev/${PROJECT_ID}/permit-pilot/mcp:latest
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args: ["build", "-f", "Dockerfile.mcp", "-t", "${_IMAGE}", "."]
+images:
+  - ${_IMAGE}

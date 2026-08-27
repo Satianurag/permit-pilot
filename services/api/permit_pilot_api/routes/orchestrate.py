@@ -4,18 +4,11 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from permit_pilot_core.observability.traces import TraceRecorder
 from permit_pilot_core.orchestration.vertex import orchestrate_case_summary
+from permit_pilot_core.settings import get_settings
 from permit_pilot_api.auth import ClerkUser, clerk_actor, get_current_user
 from permit_pilot_api.deps import store_from_request
 
 router = APIRouter(prefix="/cases", tags=["orchestrate"], dependencies=[Depends(get_current_user)])
-
-
-@router.get("/{case_id}/trace")
-def get_trace(case_id: str, request: Request):
-    store = store_from_request(request)
-    if not store.get_case(case_id):
-        raise HTTPException(status_code=404, detail="Case not found")
-    return store.list_trace_spans(case_id)
 
 
 @router.post("/{case_id}/orchestrate")
@@ -44,7 +37,7 @@ def orchestrate(
     store.save_briefing(
         case_id,
         summary=summary,
-        model="vertex",
+        model=get_settings().vertex_model,
         generated_by=clerk_actor(current_user),
     )
     store.append_audit(
@@ -53,4 +46,4 @@ def orchestrate(
         action="briefing_generated",
         detail=summary[:200] + ("…" if len(summary) > 200 else ""),
     )
-    return {"case_id": case_id, "summary": summary, "model": "vertex"}
+    return {"case_id": case_id, "summary": summary, "model": get_settings().vertex_model}

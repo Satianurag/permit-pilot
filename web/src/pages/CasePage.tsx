@@ -1,20 +1,29 @@
 import { KeyboardEvent, useCallback, useEffect, useId, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import ConfirmDialog from "../components/ConfirmDialog";
 import EmptyState from "../components/EmptyState";
 import ModalDialog from "../components/ModalDialog";
 import Skeleton from "../components/Skeleton";
 import { StatusBadge } from "../components/StatusBadge";
-import TraceReplay from "../components/TraceReplay";
 import { useToast } from "../components/Toast";
-import { api, Case, CaseBundle, Claim, ConditionTemplate, DepartmentReview, ParcelContext, RelatedPermit, Task } from "../lib/api";
+import { Sheet } from "../components/ui/sheet";
+import { api, Case, Claim, ConditionTemplate, DepartmentReview, Task } from "../lib/api";
 import { caseBackTarget } from "../lib/caseBack";
-import { groupAuditEvents, sortDepartmentReviews } from "../lib/auditFormat";
+import { sortDepartmentReviews } from "../lib/auditFormat";
 import { readBriefing, writeBriefing } from "../lib/briefingCache";
 import { errorMessage, isNotFoundError } from "../lib/errors";
-import { formatStatus } from "../lib/formatStatus";
 import { readNoteDraft, writeNoteDraft } from "../lib/noteDraftCache";
 import { reviewClock } from "../lib/reviewClock";
+import { caseKeys, useCaseBundle, useCaseContext, useInvalidateCase } from "../lib/useCaseBundle";
+import {
+  AuditTab,
+  ClaimsTab,
+  DecisionFields,
+  DistributionTab,
+  DocumentsTab,
+  SummaryTab,
+} from "./case/CaseTabs";
 
 const TABS = ["summary", "distribution", "documents", "claims", "audit"] as const;
 type Tab = (typeof TABS)[number];
@@ -35,9 +44,22 @@ export default function CasePage() {
   const tab: Tab = isTab(params.get("tab")) ? (params.get("tab") as Tab) : "summary";
   const from = params.get("from") ?? "tasks";
   const back = caseBackTarget(from);
-  const [bundle, setBundle] = useState<CaseBundle | null>(null);
-  const [context, setContext] = useState<{ related_permits: RelatedPermit[]; parcel: ParcelContext | null } | null>(null);
-  const [contextLoading, setContextLoading] = useState(false);
+  const bundleQuery = useCaseBundle(caseId);
+  const bundle = bundleQuery.data ?? null;
+  const bundleError = bundleQuery.error ? errorMessage(bundleQuery.error) : null;
+  const invalidate = useInvalidateCase();
+  const contextQuery = useCaseContext(caseId, tab === "summary");
+  const context = contextQuery.data ?? null;
+  const contextLoading = contextQuery.isLoading || contextQuery.isFetching;
+  const { data: conditions = [] } = useQuery({
+    queryKey: ["conditions"],
+    queryFn: api.listConditions,
+  });
+  const stubQuery = useQuery({
+    queryKey: caseKeys.case(caseId),
+    queryFn: () => api.getCase(caseId),
+    enabled: Boolean(bundleError && !isNotFoundError(bundleError)),
+  });
   const [selected, setSelected] = useState<DepartmentReview | null>(null);
   const [claimText, setClaimText] = useState("");
   const [responseText, setResponseText] = useState("");
@@ -45,13 +67,9 @@ export default function CasePage() {
   const [note, setNote] = useState(() => readNoteDraft(caseId) ?? "");
   const [briefing, setBriefing] = useState<string | null>(() => readBriefing(caseId));
   const [error, setError] = useState<string | null>(null);
-  const [bundleError, setBundleError] = useState<string | null>(null);
-  const [caseStub, setCaseStub] = useState<Case | null>(null);
-  const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [approveOpen, setApproveOpen] = useState(false);
   const [changesOpen, setChangesOpen] = useState(false);
-  const [conditions, setConditions] = useState<ConditionTemplate[]>([]);
   const [planUrl, setPlanUrl] = useState<string | null>(null);
   const [nextTask, setNextTask] = useState<Task | null>(null);
   const [editOpen, setEditOpen] = useState(false);
@@ -82,15 +100,20 @@ export default function CasePage() {
     document.getElementById(`${tabsId}-${TABS[next]}`)?.focus();
   };
 
+  const focusNote = () => {
+    const mobile = window.matchMedia("(max-width: 639px)").matches || decisionSheetOpen;
+    document.getElementById(mobile ? "clerk-note-mobile" : "clerk-note")?.focus();
+  };
+
   const requireNote = (override = false) => {
     if (!note.trim()) {
       setError("Clerk note is required for the audit trail");
-      document.getElementById("clerk-note")?.focus();
+      focusNote();
       return false;
     }
     if (override && note.trim().length < 20) {
       setError("Override decisions require a clerk note of at least 20 characters explaining why.");
-      document.getElementById("clerk-note")?.focus();
+      focusNote();
       return false;
     }
     return true;
@@ -101,54 +124,13 @@ export default function CasePage() {
     writeNoteDraft(caseId, value);
   };
 
-  const load = useCallback(
-    (silent = false) => {
-      if (!silent) setLoading(true);
-      setBundleError(null);
-      api
-        .getCaseBundle(caseId)
-        .then(setBundle)
-        .catch((err: Error) => setBundleError(err.message))
-        .finally(() => setLoading(false));
-    },
-    [caseId],
-  );
-
-  useEffect(() => load(), [load]);
-
-  useEffect(() => {
-    if (bundle || !bundleError || isNotFoundError(bundleError)) {
-      setCaseStub(null);
-      return;
-    }
-    api
-      .getCase(caseId)
-      .then(setCaseStub)
-      .catch(() => setCaseStub(null));
-  }, [bundle, bundleError, caseId]);
-
-  useEffect(() => {
-    api.listConditions().then(setConditions).catch(() => setConditions([]));
-  }, []);
-
   useEffect(() => {
     setBriefing(readBriefing(caseId));
     setNote(readNoteDraft(caseId) ?? "");
     setNextTask(null);
     setPlanUrl(null);
-    setContext(null);
     setDecisionSheetOpen(false);
   }, [caseId]);
-
-  useEffect(() => {
-    if (tab !== "summary" || context || contextLoading) return;
-    setContextLoading(true);
-    api
-      .getCaseContext(caseId)
-      .then(setContext)
-      .catch(() => setContext({ related_permits: [], parcel: null }))
-      .finally(() => setContextLoading(false));
-  }, [tab, caseId, context, contextLoading]);
 
   useEffect(() => {
     if (bundle?.briefing?.summary) {
@@ -156,9 +138,6 @@ export default function CasePage() {
       writeBriefing(caseId, bundle.briefing.summary);
     }
   }, [bundle?.briefing, caseId]);
-
-  const storedBriefing = bundle?.briefing;
-  const hasStoredBriefing = Boolean(storedBriefing?.summary || briefing);
 
   useEffect(() => {
     if (!bundle?.document?.has_pdf) {
@@ -198,23 +177,15 @@ export default function CasePage() {
     bundle?.distribution.filter((row) => row.department !== "critic") ?? [],
   );
   const criticReview = bundle?.distribution.find((row) => row.department === "critic");
-  const workflowRunning =
-    bundle?.workflow.some((step) => step.status === "running" || step.status === "pending") ?? false;
-  const stalled = bundle?.workflow.some((step) => step.status === "failed" || step.status === "interrupted") ?? false;
   const distributionUpdatedAt = bundle?.distribution.reduce<string | null>((latest, row) => {
     if (!row.updated_at) return latest;
     if (!latest || row.updated_at > latest) return row.updated_at;
     return latest;
   }, null);
   const distributionStale =
-    distributionUpdatedAt != null &&
-    Date.now() - new Date(distributionUpdatedAt).getTime() > DISTRIBUTION_STALE_MS;
-
-  useEffect(() => {
-    if (!checking && !workflowRunning) return;
-    const timer = window.setInterval(() => load(true), 4000);
-    return () => window.clearInterval(timer);
-  }, [checking, workflowRunning, load]);
+    distributionUpdatedAt != null && Date.now() - new Date(distributionUpdatedAt).getTime() > DISTRIBUTION_STALE_MS;
+  const storedBriefing = bundle?.briefing;
+  const hasStoredBriefing = Boolean(storedBriefing?.summary || briefing);
 
   useEffect(() => {
     if (!showDecisionFooter) {
@@ -225,9 +196,7 @@ export default function CasePage() {
       const desktop = footerRef.current;
       const mobile = mobileFooterRef.current;
       const height =
-        desktop && desktop.offsetHeight > 0
-          ? desktop.offsetHeight
-          : mobile?.offsetHeight ?? 0;
+        desktop && desktop.offsetHeight > 0 ? desktop.offsetHeight : (mobile?.offsetHeight ?? 0);
       setFooterPad(height > 0 ? height + 16 : 0);
     };
     sync();
@@ -236,6 +205,26 @@ export default function CasePage() {
     if (mobileFooterRef.current) ro.observe(mobileFooterRef.current);
     return () => ro.disconnect();
   }, [showDecisionFooter, decisionSheetOpen, failed.length, needsInfo.length, conditions.length, note]);
+
+  const runAction = async (
+    key: string,
+    action: () => Promise<void>,
+    successMessage?: string,
+    reload = true,
+    stickySuccess = false,
+  ) => {
+    setBusy(key);
+    setError(null);
+    try {
+      await action();
+      if (reload) await invalidate(caseId);
+      if (successMessage) push(successMessage, "success", { sticky: stickySuccess });
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(null);
+    }
+  };
 
   const lookupBinForCase = () =>
     runAction(
@@ -253,7 +242,7 @@ export default function CasePage() {
         await api.refreshBinDepartments(caseId);
         setSelected(null);
       },
-      "BIN resolved — fire, housing, and building reviews refreshed.",
+      "BIN resolved — fire, housing, and building reviews queued.",
     );
 
   const openEditCase = () => {
@@ -286,30 +275,10 @@ export default function CasePage() {
       "Case details updated.",
     );
 
-  const runAction = async (
-    key: string,
-    action: () => Promise<void>,
-    successMessage?: string,
-    reload = true,
-    stickySuccess = false,
-  ) => {
-    setBusy(key);
-    setError(null);
-    try {
-      await action();
-      if (reload) load(true);
-      if (successMessage) push(successMessage, "success", { sticky: stickySuccess });
-    } catch (err) {
-      setError(errorMessage(err));
-    } finally {
-      setBusy(null);
-    }
-  };
-
   const appendCondition = (template: ConditionTemplate) => {
     const line = `${template.code}: ${template.label}`;
     onNoteChange(note.trim() ? `${note.trim()}\n${line}` : line);
-    document.getElementById("clerk-note")?.focus();
+    focusNote();
   };
 
   const decisionBlocked = mutating || checking;
@@ -336,9 +305,7 @@ export default function CasePage() {
         const queue = await api.listTasks("open");
         const sorted = [...queue]
           .filter((task) => task.case_id !== caseId)
-          .sort(
-            (a, b) => reviewClock(a.created_at).due.getTime() - reviewClock(b.created_at).due.getTime(),
-          );
+          .sort((a, b) => reviewClock(a.created_at).due.getTime() - reviewClock(b.created_at).due.getTime());
         setNextTask(sorted[0] ?? null);
       },
       decision === "approve" ? "Dossier approved." : "Changes requested.",
@@ -346,7 +313,12 @@ export default function CasePage() {
       true,
     );
 
-  if (loading && !bundle) {
+  const copyText = useCallback((value: string) => {
+    void navigator.clipboard.writeText(value);
+    push("Copied to clipboard.", "info");
+  }, [push]);
+
+  if (bundleQuery.isLoading && !bundle) {
     return <Skeleton rows={8} label="Loading case" />;
   }
 
@@ -364,7 +336,7 @@ export default function CasePage() {
               <Link to="/tasks" className="pp-btn-secondary text-sm">
                 My Tasks
               </Link>
-              <Link to="/permits" className="px-4 py-2 rounded-md border border-pp-border text-sm">
+              <Link to="/permits" className="pp-btn-secondary text-sm">
                 Permit search
               </Link>
             </div>
@@ -375,6 +347,7 @@ export default function CasePage() {
   }
 
   if (!bundle && bundleError) {
+    const caseStub = stubQuery.data;
     return (
       <div className="space-y-4">
         <Link to={back.to} className="text-sm text-pp-accent hover:underline">
@@ -389,36 +362,41 @@ export default function CasePage() {
           </div>
         )}
         <EmptyState
-          title={isNotFoundError(bundleError) ? "Case not found" : "Couldn't load this case"}
+          title="Couldn't load this case"
           description={errorMessage(bundleError)}
           action={
-            !isNotFoundError(bundleError) ? (
-              <button type="button" onClick={() => load()} className="px-4 py-2 rounded-full bg-pp-accent text-white text-sm">
-                Try again
-              </button>
-            ) : (
-              <Link to="/tasks" className="px-4 py-2 rounded-md border border-pp-border text-sm">
-                Back to tasks
-              </Link>
-            )
+            <button type="button" onClick={() => void bundleQuery.refetch()} className="pp-btn-primary text-sm">
+              Try again
+            </button>
           }
         />
       </div>
     );
   }
 
-  if (!caseData) {
+  if (!caseData || !bundle) {
     return <Skeleton rows={4} label="Loading case" />;
   }
+
+  const decisionProps = {
+    note,
+    conditions,
+    overrideNeeded,
+    busy,
+    decisionBlocked,
+    decisionDisabledTitle,
+    mutating,
+    onNote: onNoteChange,
+    onAppend: appendCondition,
+    onApprove: () => requireNote(overrideNeeded) && setApproveOpen(true),
+    onChanges: () => requireNote() && setChangesOpen(true),
+  };
 
   return (
     <div className="space-y-4" style={footerPad > 0 ? { paddingBottom: `${footerPad}px` } : undefined}>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <Link
-            to={back.to}
-            className="text-sm text-pp-accent hover:underline"
-          >
+          <Link to={back.to} className="text-sm text-pp-accent hover:underline">
             ← Back to {back.label}
           </Link>
           <h1 className="pp-page-title mt-1">{caseData.address}</h1>
@@ -430,13 +408,13 @@ export default function CasePage() {
       </div>
 
       {error && (
-        <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-md p-3" role="alert">
+        <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-xl p-3" role="alert">
           {errorMessage(error)}
         </p>
       )}
 
       {nextTask && (
-        <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-950" role="status">
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-950" role="status">
           Decision saved.{" "}
           <button
             type="button"
@@ -449,12 +427,12 @@ export default function CasePage() {
       )}
 
       {canDecide && (failed.length > 0 || needsInfo.length > 0 || checking) && (
-        <p className="text-sm text-slate-800 bg-slate-50 border border-pp-border rounded-md p-3" role="status">
+        <p className="text-sm text-slate-800 bg-slate-50 border border-pp-border rounded-xl p-3" role="status">
           {checking && "Distribution is still running — approval is blocked until reviews finish. "}
           {!checking && failed.length > 0 && needsInfo.length > 0 && (
             <>
-              {failed.length + needsInfo.length} department{failed.length + needsInfo.length === 1 ? "" : "s"} need
-              attention ({failed.map((row) => row.department).join(", ")} failed;{" "}
+              {failed.length + needsInfo.length} departments need attention (
+              {failed.map((row) => row.department).join(", ")} failed;{" "}
               {needsInfo.map((row) => row.department).join(", ")} need info). See Distribution tab.
             </>
           )}
@@ -499,580 +477,118 @@ export default function CasePage() {
         ))}
       </div>
 
-      {tab === "summary" && (
-        <div
-          role="tabpanel"
-          id={`${tabsId}-panel-summary`}
-          aria-labelledby={`${tabsId}-summary`}
-          className="grid md:grid-cols-2 gap-4"
-        >
-          <div className="bg-white border border-pp-border rounded-lg p-4">
-            <div className="flex items-center justify-between gap-2 mb-3">
-              <h3 className="font-medium text-pp-navy">Property</h3>
-              {canDecide && (
-                <button
-                  type="button"
-                  onClick={openEditCase}
-                  className="text-sm text-pp-accent hover:underline"
-                >
-                  Edit case details
-                </button>
-              )}
-            </div>
-            <dl className="text-sm space-y-2">
-              <div className="flex justify-between gap-4">
-                <dt className="text-slate-500">Owner</dt>
-                <dd className="text-right">
-                  {caseData.owner || "—"}
-                  <p className="text-xs text-slate-500 mt-1 text-left sm:text-right">
-                    Owner from NYC PLUTO (public record). Names in intake packets are redacted before storage.
-                  </p>
-                </dd>
-              </div>
-              <div className="flex justify-between gap-4">
-                <dt className="text-slate-500">Borough</dt>
-                <dd>{caseData.borough || "—"}</dd>
-              </div>
-              <div className="flex justify-between gap-4">
-                <dt className="text-slate-500">Work</dt>
-                <dd className="text-right max-w-xs">{caseData.work_type}</dd>
-              </div>
-              {context?.parcel?.zoning_district && (
-                <div className="flex justify-between gap-4">
-                  <dt className="text-slate-500">Zoning</dt>
-                  <dd>{context.parcel.zoning_district}</dd>
-                </div>
-              )}
-            </dl>
-            {context?.parcel?.map_url && (
-              <div className="pt-2 mt-2 border-t border-pp-border">
-                <a
-                  href={context.parcel.map_url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-sm text-pp-accent hover:underline"
-                >
-                  Open parcel map (NYC Open Data)
-                </a>
-              </div>
-            )}
-          </div>
-          <div className="bg-white border border-pp-border rounded-lg p-4 space-y-4">
-            <div>
-              <h3 className="font-medium text-pp-navy mb-3">Case timeline</h3>
-              <p className="text-sm text-slate-600">Opened {new Date(caseData.created_at).toLocaleString()}</p>
-              <p className="text-sm text-slate-600">Updated {new Date(caseData.updated_at).toLocaleString()}</p>
-              <button
-                type="button"
-                disabled={!canDecide || busy === "briefing"}
-                onClick={() =>
-                  runAction("briefing", async () => {
-                    const result = await api.orchestrate(caseId);
-                    setBriefing(result.summary);
-                    writeBriefing(caseId, result.summary);
-                  }, hasStoredBriefing ? "Clerk briefing regenerated." : "Clerk briefing generated.")
-                }
-                className="mt-4 text-sm px-3 py-1.5 rounded-full bg-pp-accent text-white disabled:opacity-50"
-              >
-                {busy === "briefing"
-                  ? "Generating…"
-                  : hasStoredBriefing
-                    ? "Regenerate briefing"
-                    : "Generate clerk briefing"}
-              </button>
-              {(briefing || storedBriefing?.summary) && (
-                <div className="mt-3">
-                  {storedBriefing?.generated_at && (
-                    <p className="text-xs text-slate-500 mb-1">
-                      Generated {new Date(storedBriefing.generated_at).toLocaleString()}
-                      {storedBriefing.generated_by ? ` · ${storedBriefing.generated_by}` : ""}
-                    </p>
-                  )}
-                  <p className="text-sm text-slate-700 border-l-4 border-pp-accent pl-3 whitespace-pre-wrap">
-                    {briefing || storedBriefing?.summary}
-                  </p>
-                </div>
-              )}
-            </div>
-            {contextLoading && (
-              <p className="text-sm text-slate-500">Loading NYC Open Data context…</p>
-            )}
-            {context && !contextLoading && (
-              <div>
-                <h3 className="font-medium text-pp-navy mb-2">Related permits (NYC Open Data)</h3>
-                {context.related_permits.length === 0 ? (
-                  <p className="text-sm text-slate-600">No related permit filings found for this BBL or BIN.</p>
-                ) : (
-                  <>
-                    <ul className="text-sm space-y-2">
-                      {(showAllPermits
-                        ? context.related_permits
-                        : context.related_permits.slice(0, 5)).map((permit, index) => (
-                        <li
-                          key={`${permit.job_number ?? "job"}-${permit.filing_date ?? index}-${permit.work_type ?? ""}`}
-                          className="border border-pp-border rounded p-2"
-                        >
-                          <p className="font-medium">{permit.job_number || "Filing (no job number)"}</p>
-                          <p className="text-slate-600">{permit.work_type || "—"}</p>
-                          <p className="text-slate-500 text-xs">
-                            {permit.status || "Unknown status"}
-                            {permit.filing_date ? ` · ${permit.filing_date}` : ""}
-                          </p>
-                        </li>
-                      ))}
-                    </ul>
-                    {context.related_permits.length > 5 && (
-                      <button
-                        type="button"
-                        className="mt-2 text-sm text-pp-accent hover:underline"
-                        onClick={() => setShowAllPermits((open) => !open)}
-                      >
-                        {showAllPermits
-                          ? "Show fewer"
-                          : `Show all ${context.related_permits.length} permits`}
-                      </button>
-                    )}
-                  </>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {tab === "distribution" && bundle && (
-        <div role="tabpanel" id={`${tabsId}-panel-distribution`} aria-labelledby={`${tabsId}-distribution`} className="space-y-3">
-          {stalled && (
-            <p className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded-md p-3" role="status">
-              Department workflow stalled — resume to continue from the last checkpoint. Completed departments are not
-              re-run.
-            </p>
-          )}
-          {bundle.workflow.length > 0 && (
-            <div className="bg-slate-50 border border-pp-border rounded-lg p-3 text-sm">
-              <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-                <p className="font-medium text-pp-navy">Department workflow</p>
-                <div className="flex flex-wrap gap-2">
-                  {workflowRunning && (
-                    <button
-                      type="button"
-                      disabled={busy === "interrupt"}
-                      onClick={() =>
-                        runAction("interrupt", async () => {
-                          await api.interruptWorkflow(caseId);
-                        }, "Worker crash simulated — resume to continue.")
-                      }
-                      className="text-sm px-3 py-1 rounded-md border border-red-300 text-red-800 bg-white disabled:opacity-50"
-                    >
-                      {busy === "interrupt" ? "Interrupting…" : "Simulate worker crash"}
-                    </button>
-                  )}
-                  {stalled && (
-                    <button
-                      type="button"
-                      disabled={busy === "resume"}
-                      onClick={() =>
-                        runAction("resume", async () => {
-                          await api.resumeWorkflow(caseId);
-                        }, "Workflow resumed from checkpoint.")
-                      }
-                      className="text-sm px-3 py-1 rounded-md bg-pp-navy text-white disabled:opacity-50"
-                    >
-                      {busy === "resume" ? "Resuming…" : "Resume workflow"}
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    disabled={busy === "gcp"}
-                    onClick={() =>
-                      runAction("gcp", async () => {
-                        await api.startGcpWorkflow(caseId);
-                      }, "Cloud Workflows execution started.")
-                    }
-                    className="text-sm px-3 py-1 rounded-md border border-pp-border bg-white disabled:opacity-50"
-                  >
-                    {busy === "gcp" ? "Starting…" : "Run on Cloud Workflows"}
-                  </button>
-                </div>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {bundle.workflow.map((step) => (
-                  <span
-                    key={step.department ?? step.name}
-                    className="px-2 py-0.5 rounded-full text-xs capitalize bg-white border border-pp-border"
-                  >
-                    {step.department ?? step.name}: {formatStatus(step.status)}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            {distributionUpdatedAt && (
-              <div className="text-sm text-slate-600">
-                <p>Data as of {new Date(distributionUpdatedAt).toLocaleString()}</p>
-                {distributionStale && (
-                  <p className="text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1 mt-1 text-xs">
-                    Distribution data is over 24 hours old — refresh from NYC Open Data before deciding.
-                  </p>
-                )}
-              </div>
-            )}
-            <button
-              type="button"
-              disabled={!canDecide || busy === "refresh"}
-              onClick={() =>
-                runAction(
-                  "refresh",
-                  async () => {
-                    const distribution = await api.refreshDistribution(caseId);
-                    setBundle((prev) => (prev ? { ...prev, distribution } : prev));
-                  },
-                  "Distribution refreshed from NYC Open Data.",
-                  false,
-                )
-              }
-              className="text-sm px-3 py-1.5 rounded-full bg-pp-accent text-white disabled:opacity-50"
-            >
-              {busy === "refresh" ? "Refreshing…" : "Refresh from NYC Open Data"}
-            </button>
-          </div>
-          {bundle.distribution.length === 0 ? (
-            <EmptyState
-              title="No department reviews yet"
-              description="Distribution results appear after intake or after you refresh from NYC Open Data."
-            />
-          ) : (
-            <>
-            <div className="table-scroll rounded-lg border border-pp-border bg-white">
-              <table className="min-w-full text-sm">
-                <caption className="sr-only">Department distribution reviews. Activate a row for findings.</caption>
-                <thead className="bg-slate-50 text-slate-600 text-left">
-                  <tr>
-                    <th scope="col" className="px-4 py-2">
-                      Department
-                    </th>
-                    <th scope="col" className="px-4 py-2">
-                      Status
-                    </th>
-                    <th scope="col" className="px-4 py-2">
-                      Summary
-                    </th>
-                    <th scope="col" className="px-4 py-2">
-                      Updated
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {departmentRows.map((row) => (
-                    <tr key={row.department} className="border-t border-pp-border hover:bg-slate-50">
-                      <td className="px-4 py-3">
-                        <button
-                          type="button"
-                          onClick={() => setSelected(row)}
-                          className="flex items-center gap-2 text-left capitalize font-medium text-pp-navy hover:text-pp-accent w-full"
-                        >
-                          <span>{row.department}</span>
-                          <span className="text-slate-400 text-xs" aria-hidden="true">›</span>
-                          <span className="sr-only">Open {row.department} review details</span>
-                        </button>
-                      </td>
-                      <td className="px-4 py-3">
-                        <StatusBadge status={row.status} />
-                      </td>
-                      <td className="px-4 py-3 text-slate-600">{row.summary}</td>
-                      <td className="px-4 py-3 text-slate-500 text-xs">
-                        {new Date(row.updated_at).toLocaleString()}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            {criticReview && (
-              <div className="bg-white border border-pp-border rounded-lg p-4">
-                <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-                  <h3 className="font-medium text-pp-navy">Policy check</h3>
-                  <StatusBadge status={criticReview.status} />
-                </div>
-                <p className="text-sm text-slate-600">{criticReview.summary}</p>
-                <button
-                  type="button"
-                  className="mt-3 text-sm text-pp-accent hover:underline"
-                  onClick={() => setSelected(criticReview)}
-                >
-                  View policy check details
-                </button>
-              </div>
-            )}
-            </>
-          )}
-        </div>
-      )}
-
-      {tab === "documents" && (
-        <div role="tabpanel" id={`${tabsId}-panel-documents`} aria-labelledby={`${tabsId}-documents`} className="space-y-4">
-          {!bundle?.document ? (
-            <EmptyState
-              title="No intake document on file"
-              description="Upload a plan PDF or applicant packet during intake. Packet text is stored redacted after PII removal."
-            />
-          ) : (
-            <div className="bg-white border border-pp-border rounded-lg p-4 space-y-4">
-              <div>
-                <h3 className="font-medium text-pp-navy">Intake packet (redacted)</h3>
-                <p className="text-xs text-slate-500 mt-1">
-                  {bundle.document.filename ? `${bundle.document.filename} · ` : ""}
-                  {bundle.document.redacted_text.length.toLocaleString()} characters · stored{" "}
-                  {new Date(bundle.document.stored_at).toLocaleString()}
-                </p>
-              </div>
-              {bundle.document.pii_findings.length > 0 && (
-                <div className="rounded-md bg-amber-50 border border-amber-200 p-3 text-sm">
-                  <p className="font-medium text-amber-900">PII redacted</p>
-                  <p className="text-amber-800 mt-1">{bundle.document.pii_findings.join(", ")}</p>
-                </div>
-              )}
-              {bundle.document.redacted_text ? (
-                <pre className="whitespace-pre-wrap text-sm text-slate-700 bg-slate-50 border border-pp-border rounded-md p-4">
-                  {bundle.document.redacted_text}
-                </pre>
-              ) : (
-                <p className="text-sm text-slate-600">No packet text — plan PDF only.</p>
-              )}
-              {bundle.document.has_pdf && (
-                <div>
-                  <h3 className="font-medium text-pp-navy mb-2">Plan PDF</h3>
-                  {planUrl ? (
-                    <iframe title="Plan PDF" src={planUrl} className="w-full min-h-[28rem] border border-pp-border rounded-md" />
-                  ) : (
-                    <Skeleton rows={4} label="Loading plan PDF" />
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-
-      {tab === "claims" && bundle && (
-        <div role="tabpanel" id={`${tabsId}-panel-claims`} aria-labelledby={`${tabsId}-claims`} className="space-y-4">
-          <p className="text-sm text-slate-600">
-            Claims are recorded on the case file with a reference ID for manual DOB NOW entry. The applicant is not
-            notified automatically.
-          </p>
-          {canDecide && (
-            <div className="flex flex-col sm:flex-row gap-2">
-              <label htmlFor="claim-message" className="sr-only">
-                Request missing document
-              </label>
-              <input
-                id="claim-message"
-                className="flex-1 border border-pp-border rounded-md px-3 py-2 text-sm"
-                placeholder="Request missing document from applicant…"
-                value={claimText}
-                onChange={(e) => setClaimText(e.target.value)}
-              />
-              <button
-                type="button"
-                disabled={busy === "claim"}
-                onClick={() =>
-                  runAction("claim", async () => {
-                    if (!claimText.trim()) throw new Error("Enter a document request for the applicant");
-                    await api.createClaim(caseId, claimText.trim());
-                    setClaimText("");
-                  }, "Claim recorded with manual DOB NOW reference.")
-                }
-                className="px-4 py-2 rounded-full bg-pp-accent text-white text-sm disabled:opacity-50"
-              >
-                {busy === "claim" ? "Saving…" : "Record claim"}
-              </button>
-            </div>
-          )}
-          {bundle.claims.length === 0 ? (
-            <EmptyState title="No claims on this case" description="Use a claim when the applicant must supply missing documents." />
-          ) : (
-            <ul className="space-y-3">
-              {bundle.claims.map((claim: Claim) => (
-                <li key={claim.id} className="bg-white border border-pp-border rounded-md p-4 text-sm space-y-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <StatusBadge status={claim.status} />
-                    <span className="text-xs text-slate-500">{new Date(claim.created_at).toLocaleString()}</span>
-                  </div>
-                  <p>{claim.message}</p>
-                  {claim.notification_reference && (
-                    <div className="text-xs text-slate-600 space-y-2 border border-pp-border rounded-md p-3 bg-slate-50">
-                      <p>
-                        Reference for manual DOB NOW entry:{" "}
-                        <span className="font-mono">{claim.notification_reference}</span>
-                      </p>
-                      <p className="text-slate-500">The applicant is not notified automatically.</p>
-                      <div className="flex flex-wrap items-center gap-3">
-                        <button
-                          type="button"
-                          className="text-xs px-2 py-1 rounded-md border border-pp-border bg-white"
-                          onClick={() => navigator.clipboard.writeText(claim.notification_reference ?? "")}
-                        >
-                          Copy reference
-                        </button>
-                        {!claim.manual_dob_now_sent && (
-                          <button
-                            type="button"
-                            className="text-xs px-2 py-1 rounded-md border border-pp-border bg-white"
-                            disabled={busy === `dob-${claim.id}`}
-                            onClick={() =>
-                              runAction(`dob-${claim.id}`, async () => {
-                                await api.markClaimDobNowSent(caseId, claim.id);
-                              }, "Marked as sent to DOB NOW.")
-                            }
-                          >
-                            {busy === `dob-${claim.id}` ? "Saving…" : "Mark as sent to DOB NOW"}
-                          </button>
-                        )}
-                        {claim.manual_dob_now_sent && (
-                          <span className="text-emerald-800">
-                            Sent to DOB NOW manually
-                            {claim.notified_at ? ` · ${new Date(claim.notified_at).toLocaleString()}` : ""}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                  {claim.response_message && (
-                    <div className="rounded-md bg-slate-50 border border-pp-border p-3">
-                      <p className="text-xs font-medium text-slate-500">Applicant response (recorded by clerk)</p>
-                      <p className="mt-1">{claim.response_message}</p>
-                      {claim.responded_at && (
-                        <p className="text-xs text-slate-500 mt-2">{new Date(claim.responded_at).toLocaleString()}</p>
-                      )}
-                    </div>
-                  )}
-                  {claim.status === "open" && canDecide && (
-                    <div className="space-y-2">
-                      {respondingClaimId === claim.id ? (
-                        <>
-                          <label htmlFor={`response-${claim.id}`} className="block text-sm font-medium text-slate-700">
-                            Record applicant response
-                          </label>
-                          <textarea
-                            id={`response-${claim.id}`}
-                            className="w-full border border-pp-border rounded-md px-3 py-2 text-sm min-h-20"
-                            value={responseText}
-                            onChange={(e) => setResponseText(e.target.value)}
-                          />
-                          <div className="flex gap-2">
-                            <button
-                              type="button"
-                              disabled={busy === `respond-${claim.id}`}
-                              onClick={() =>
-                                runAction(`respond-${claim.id}`, async () => {
-                                  if (!responseText.trim()) throw new Error("Enter the applicant response received");
-                                  await api.respondToClaim(caseId, claim.id, responseText.trim());
-                                  setResponseText("");
-                                  setRespondingClaimId(null);
-                                })
-                              }
-                              className="px-3 py-1.5 rounded-full bg-pp-accent text-white text-sm disabled:opacity-50"
-                            >
-                              {busy === `respond-${claim.id}` ? "Saving…" : "Save response"}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setRespondingClaimId(null);
-                                setResponseText("");
-                              }}
-                              className="px-3 py-1.5 rounded-md border border-pp-border text-sm"
-                            >
-                              Cancel
-                            </button>
-                          </div>
-                        </>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => setRespondingClaimId(claim.id)}
-                          className="text-sm text-pp-accent hover:underline"
-                        >
-                          Record applicant response
-                        </button>
-                      )}
-                    </div>
-                  )}
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
-
-      {tab === "audit" && bundle && (
-        <div role="tabpanel" id={`${tabsId}-panel-audit`} aria-labelledby={`${tabsId}-audit`} className="space-y-6">
-          <div className="bg-white border border-pp-border rounded-lg p-4">
-            <h3 className="font-medium text-pp-navy mb-3">Activity log</h3>
-            <TraceReplay
-              spans={bundle.trace}
-              cloudTraceUrl={bundle.observability.cloud_trace_url}
-              langfuseUrl={bundle.observability.langfuse_url}
-              gcpWorkflowsUrl={bundle.observability.gcp_workflows_url}
-            />
-          </div>
-          <div>
-            <h3 className="font-medium text-pp-navy mb-3">Audit timeline</h3>
-            {bundle.audit.length === 0 ? (
-              <EmptyState title="No audit events yet" description="Clerk actions and system events will appear here." />
-            ) : (
-              <ol className="space-y-2">
-                {groupAuditEvents(bundle.audit).map((item, index) => {
-                  if (item.kind === "workflow_group") {
-                    return (
-                      <li
-                        key={`workflow-group-${index}`}
-                        className="bg-slate-50 border border-pp-border rounded-md p-3 text-sm"
-                      >
-                        <p className="font-medium text-slate-700">
-                          {item.count} department workflow step{item.count === 1 ? "" : "s"} completed
-                        </p>
-                        <p className="text-xs text-slate-500 mt-1">
-                          {item.actor} · {new Date(item.at).toLocaleString()}
-                        </p>
-                      </li>
-                    );
-                  }
-                  const { event, summary, truncated } = item;
-                  const expanded = expandedAudit[event.id];
-                  return (
-                    <li key={event.id} className="bg-white border border-pp-border rounded-md p-3 text-sm">
-                      <p className="font-medium capitalize">{formatStatus(event.action)}</p>
-                      <p className="text-slate-600 whitespace-pre-wrap">
-                        {truncated && expanded ? event.detail : summary}
-                      </p>
-                      {truncated && (
-                        <button
-                          type="button"
-                          className="text-xs text-pp-accent hover:underline mt-1"
-                          onClick={() =>
-                            setExpandedAudit((prev) => ({ ...prev, [event.id]: !prev[event.id] }))
-                          }
-                        >
-                          {expanded ? "Show less" : "Show more"}
-                        </button>
-                      )}
-                      <p className="text-xs text-slate-500 mt-1">
-                        {event.actor} · {new Date(event.at).toLocaleString()}
-                      </p>
-                    </li>
-                  );
-                })}
-              </ol>
-            )}
-          </div>
-        </div>
-      )}
+      <div hidden={tab !== "summary"}>
+        <SummaryTab
+          tabsId={tabsId}
+          caseData={caseData}
+          canDecide={canDecide}
+          busy={busy}
+          briefing={briefing}
+          storedBriefing={storedBriefing}
+          hasStoredBriefing={hasStoredBriefing}
+          contextLoading={contextLoading}
+          context={context}
+          showAllPermits={showAllPermits}
+          onEdit={openEditCase}
+          onBriefing={() =>
+            runAction(
+              "briefing",
+              async () => {
+                const result = await api.orchestrate(caseId);
+                setBriefing(result.summary);
+                writeBriefing(caseId, result.summary);
+              },
+              hasStoredBriefing ? "Clerk briefing regenerated." : "Clerk briefing generated.",
+            )
+          }
+          onTogglePermits={() => setShowAllPermits((value) => !value)}
+        />
+      </div>
+      <div hidden={tab !== "distribution"}>
+        <DistributionTab
+          tabsId={tabsId}
+          bundle={bundle}
+          departmentRows={departmentRows}
+          criticReview={criticReview}
+          canDecide={canDecide}
+          busy={busy}
+          distributionUpdatedAt={distributionUpdatedAt ?? null}
+          distributionStale={distributionStale}
+          onRefresh={() =>
+            runAction(
+              "refresh",
+              async () => {
+                await api.refreshDistribution(caseId);
+              },
+              "Distribution queued on Cloud Tasks.",
+            )
+          }
+          onFleet={() =>
+            runAction("fleet", async () => {
+              await api.runFleet(caseId);
+            }, "Distribution queued on Cloud Tasks.")
+          }
+          onSelect={setSelected}
+        />
+      </div>
+      <div hidden={tab !== "documents"}>
+        <DocumentsTab tabsId={tabsId} bundle={bundle} planUrl={planUrl} />
+      </div>
+      <div hidden={tab !== "claims"}>
+        <ClaimsTab
+          tabsId={tabsId}
+          bundle={bundle}
+          canDecide={canDecide}
+          busy={busy}
+          claimText={claimText}
+          responseText={responseText}
+          respondingClaimId={respondingClaimId}
+          onClaimText={setClaimText}
+          onResponseText={setResponseText}
+          onCreateClaim={() =>
+            runAction(
+              "claim",
+              async () => {
+                if (!claimText.trim()) throw new Error("Enter a document request for the applicant");
+                await api.createClaim(caseId, claimText.trim());
+                setClaimText("");
+              },
+              "Claim recorded with manual DOB NOW reference.",
+            )
+          }
+          onCopy={copyText}
+          onMarkDob={(claim: Claim) =>
+            runAction(`dob-${claim.id}`, async () => {
+              await api.markClaimDobNowSent(caseId, claim.id);
+            }, "Marked as entered in DOB NOW.")
+          }
+          onRespond={(claim: Claim) =>
+            runAction(`respond-${claim.id}`, async () => {
+              if (!responseText.trim()) throw new Error("Enter a response");
+              await api.respondToClaim(caseId, claim.id, responseText.trim());
+              setRespondingClaimId(null);
+              setResponseText("");
+            }, "Applicant response recorded. Fleet re-queued.")
+          }
+          onStartRespond={(id) => setRespondingClaimId(id)}
+          onCancelRespond={() => {
+            setRespondingClaimId(null);
+            setResponseText("");
+          }}
+        />
+      </div>
+      <div hidden={tab !== "audit"}>
+        <AuditTab
+          tabsId={tabsId}
+          bundle={bundle}
+          expandedAudit={expandedAudit}
+          onToggleAudit={(id) => setExpandedAudit((current) => ({ ...current, [id]: !current[id] }))}
+        />
+      </div>
 
       <ModalDialog
         open={Boolean(selected)}
-        title={selected ? `${selected.department} review` : "Review"}
+        title={selected ? `${selected.department} review` : "Department review"}
         onClose={() => setSelected(null)}
         variant="drawer"
       >
@@ -1096,7 +612,7 @@ export default function CasePage() {
               </h3>
               <ul className="mt-2 text-sm space-y-2">
                 {selected.evidence.map((ev) => (
-                  <li key={`${ev.dataset_id}-${ev.label}`} className="border border-pp-border rounded p-2">
+                  <li key={`${ev.dataset_id}-${ev.label}`} className="border border-pp-border rounded-xl p-2">
                     <span className="text-slate-500">{ev.dataset_id}</span> · {ev.label}:{" "}
                     <strong>{String(ev.value)}</strong>
                   </li>
@@ -1116,14 +632,14 @@ export default function CasePage() {
             )}
             {selected.status === "needs_info" &&
               (selected.summary.toLowerCase().includes("bin") || !caseData.bin) && (
-                <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm space-y-2">
+                <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm space-y-2">
                   <p className="text-amber-900">This review needs a BIN to query NYC Open Data.</p>
                   <div className="flex flex-wrap gap-2">
                     <button
                       type="button"
                       disabled={busy === "lookup-bin"}
                       onClick={() => lookupBinForCase()}
-                      className="px-3 py-1.5 rounded-full bg-pp-accent text-white text-sm disabled:opacity-50"
+                      className="pp-btn-primary text-sm"
                     >
                       {busy === "lookup-bin" ? "Looking up…" : "Look up BIN from address"}
                     </button>
@@ -1134,7 +650,7 @@ export default function CasePage() {
                           setSelected(null);
                           openEditCase();
                         }}
-                        className="px-3 py-1.5 rounded-md border border-pp-border text-sm"
+                        className="pp-btn-secondary text-sm"
                       >
                         Enter BIN manually
                       </button>
@@ -1148,65 +664,22 @@ export default function CasePage() {
 
       <ModalDialog open={editOpen} title="Edit case details" onClose={() => setEditOpen(false)}>
         <div className="space-y-3 text-sm">
-          <label className="block">
-            <span className="font-medium text-slate-700">Address</span>
-            <input
-              className="mt-1 w-full border border-pp-border rounded-md px-3 py-2"
-              value={editForm.address}
-              onChange={(e) => setEditForm((f) => ({ ...f, address: e.target.value }))}
-            />
-          </label>
-          <label className="block">
-            <span className="font-medium text-slate-700">BBL</span>
-            <input
-              className="mt-1 w-full border border-pp-border rounded-md px-3 py-2"
-              value={editForm.bbl}
-              onChange={(e) => setEditForm((f) => ({ ...f, bbl: e.target.value }))}
-            />
-          </label>
-          <label className="block">
-            <span className="font-medium text-slate-700">BIN</span>
-            <input
-              className="mt-1 w-full border border-pp-border rounded-md px-3 py-2"
-              value={editForm.bin}
-              onChange={(e) => setEditForm((f) => ({ ...f, bin: e.target.value }))}
-            />
-          </label>
-          <label className="block">
-            <span className="font-medium text-slate-700">Work type</span>
-            <input
-              className="mt-1 w-full border border-pp-border rounded-md px-3 py-2"
-              value={editForm.work_type}
-              onChange={(e) => setEditForm((f) => ({ ...f, work_type: e.target.value }))}
-            />
-          </label>
-          <label className="block">
-            <span className="font-medium text-slate-700">Owner</span>
-            <input
-              className="mt-1 w-full border border-pp-border rounded-md px-3 py-2"
-              value={editForm.owner}
-              onChange={(e) => setEditForm((f) => ({ ...f, owner: e.target.value }))}
-            />
-          </label>
-          <label className="block">
-            <span className="font-medium text-slate-700">Borough</span>
-            <input
-              className="mt-1 w-full border border-pp-border rounded-md px-3 py-2"
-              value={editForm.borough}
-              onChange={(e) => setEditForm((f) => ({ ...f, borough: e.target.value }))}
-            />
-          </label>
-          <div className="flex gap-2 pt-2">
-            <button
-              type="button"
-              disabled={busy === "edit-case"}
-              onClick={() => saveEditCase()}
-              className="px-4 py-2 rounded-full bg-pp-accent text-white disabled:opacity-50"
-            >
-              {busy === "edit-case" ? "Saving…" : "Save changes"}
-            </button>
-            <button type="button" onClick={() => setEditOpen(false)} className="px-4 py-2 rounded-md border border-pp-border">
+          {(["address", "bbl", "bin", "work_type", "owner", "borough"] as const).map((field) => (
+            <label key={field} className="block">
+              <span className="font-medium text-slate-700 capitalize">{field.replace("_", " ")}</span>
+              <input
+                className="pp-input mt-1"
+                value={editForm[field]}
+                onChange={(e) => setEditForm((form) => ({ ...form, [field]: e.target.value }))}
+              />
+            </label>
+          ))}
+          <div className="flex justify-end gap-2 pt-2">
+            <button type="button" onClick={() => setEditOpen(false)} className="pp-btn-secondary">
               Cancel
+            </button>
+            <button type="button" onClick={() => saveEditCase()} className="pp-btn-primary" disabled={busy === "edit-case"}>
+              {busy === "edit-case" ? "Saving…" : "Save"}
             </button>
           </div>
         </div>
@@ -1215,136 +688,16 @@ export default function CasePage() {
       {showDecisionFooter && (
         <>
           <div ref={mobileFooterRef} className="pp-decision-footer-mobile sm:hidden">
-            <button
-              type="button"
-              onClick={() => setDecisionSheetOpen(true)}
-              className="w-full px-4 py-3 rounded-md bg-pp-navy text-white text-sm font-medium"
-            >
+            <button type="button" onClick={() => setDecisionSheetOpen(true)} className="w-full pp-btn-primary py-3">
               Record decision
             </button>
           </div>
-
-          <dialog
-            className="pp-dialog sm:hidden fixed inset-x-0 bottom-0 z-20 m-0 max-h-[85vh] w-full rounded-t-xl border border-pp-border bg-white p-4 shadow-xl open:flex open:flex-col"
-            open={decisionSheetOpen}
-            onClose={() => setDecisionSheetOpen(false)}
-          >
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="font-medium text-pp-navy">Record decision</h2>
-              <button type="button" onClick={() => setDecisionSheetOpen(false)} className="text-sm text-slate-600">
-                Close
-              </button>
-            </div>
-            <div className="flex-1 overflow-y-auto space-y-3 pb-4">
-              {conditions.length > 0 && (
-                <div>
-                  <p className="text-xs font-medium text-slate-600 mb-2">Insert standard condition:</p>
-                  <div className="flex flex-wrap gap-2">
-                    {conditions.map((template) => (
-                      <button
-                        key={template.id}
-                        type="button"
-                        onClick={() => appendCondition(template)}
-                        className="px-2 py-1 text-xs rounded-md border border-pp-border bg-slate-50"
-                      >
-                        {template.code}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-              <div>
-                <label htmlFor="clerk-note-mobile" className="text-sm font-medium text-slate-700">
-                  Clerk note (required)
-                </label>
-                <textarea
-                  id="clerk-note-mobile"
-                  className="mt-1 w-full border border-pp-border rounded-md px-3 py-2 text-sm min-h-24"
-                  placeholder="Clerk note — required for the audit trail"
-                  value={note}
-                  onChange={(e) => onNoteChange(e.target.value)}
-                />
-                {overrideNeeded && (
-                  <p className="text-xs text-slate-500 mt-1">Override decisions require at least 20 characters.</p>
-                )}
-              </div>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  disabled={busy === "decide" || decisionBlocked}
-                  title={decisionDisabledTitle}
-                  onClick={() => requireNote(overrideNeeded) && setApproveOpen(true)}
-                  className="flex-1 px-4 py-2 rounded-md bg-emerald-700 text-white text-sm font-medium disabled:opacity-50"
-                >
-                  Approve dossier
-                </button>
-                <button
-                  type="button"
-                  disabled={busy === "decide" || mutating}
-                  onClick={() => requireNote() && setChangesOpen(true)}
-                  className="flex-1 px-4 py-2 rounded-md border border-pp-border text-sm font-medium disabled:opacity-50"
-                >
-                  Request changes
-                </button>
-              </div>
-            </div>
-          </dialog>
-
+          <Sheet open={decisionSheetOpen} onOpenChange={setDecisionSheetOpen} title="Record decision">
+            <DecisionFields noteId="clerk-note-mobile" {...decisionProps} />
+          </Sheet>
           <footer ref={footerRef} className="pp-decision-footer hidden sm:block">
-            <div className="pp-decision-footer-inner py-3 flex flex-col gap-3">
-              {conditions.length > 0 && (
-                <div>
-                  <p className="text-xs font-medium text-slate-600 mb-2">Insert standard condition:</p>
-                  <div className="flex flex-wrap gap-2">
-                    {conditions.map((template) => (
-                      <button
-                        key={template.id}
-                        type="button"
-                        onClick={() => appendCondition(template)}
-                        className="px-2 py-1 text-xs rounded-md border border-pp-border bg-slate-50 hover:bg-white"
-                      >
-                        {template.code}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-                <div className="flex flex-col gap-2 sm:flex-1">
-                  <label htmlFor="clerk-note" className="text-sm font-medium text-slate-700">
-                    Clerk note (required)
-                  </label>
-                  <textarea
-                    id="clerk-note"
-                    className="w-full border border-pp-border rounded-md px-3 py-2 text-sm min-h-20"
-                    placeholder="Clerk note — required for the audit trail"
-                    value={note}
-                    onChange={(e) => onNoteChange(e.target.value)}
-                  />
-                  {overrideNeeded && (
-                    <p className="text-xs text-slate-500">Override decisions require at least 20 characters.</p>
-                  )}
-                </div>
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    disabled={busy === "decide" || decisionBlocked}
-                    title={decisionDisabledTitle}
-                    onClick={() => requireNote(overrideNeeded) && setApproveOpen(true)}
-                    className="flex-1 sm:flex-none px-4 py-2 rounded-md bg-emerald-700 text-white text-sm font-medium disabled:opacity-50"
-                  >
-                    Approve dossier
-                  </button>
-                  <button
-                    type="button"
-                    disabled={busy === "decide" || mutating}
-                    onClick={() => requireNote() && setChangesOpen(true)}
-                    className="flex-1 sm:flex-none px-4 py-2 rounded-md border border-pp-border text-sm font-medium disabled:opacity-50"
-                  >
-                    Request changes
-                  </button>
-                </div>
-              </div>
+            <div className="pp-decision-footer-inner py-3">
+              <DecisionFields noteId="clerk-note" {...decisionProps} />
             </div>
           </footer>
         </>

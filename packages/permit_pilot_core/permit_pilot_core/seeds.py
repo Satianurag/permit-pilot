@@ -1,12 +1,10 @@
-import os
-
 from permit_pilot_core.distribution.engine import DistributionEngine
 from permit_pilot_core.firestore.store import FirestoreStore
-from permit_pilot_core.models import Citation, CreateCaseRequest, Department, ReviewStatus
+from permit_pilot_core.models import CreateCaseRequest, Department, DepartmentStep
+from permit_pilot_core.parcel import resolve_parcel
 from permit_pilot_core.socrata.client import SocrataClient
-from permit_pilot_core.workflow.runner import StepStatus, WorkflowRunner
+from permit_pilot_core.settings import get_settings
 
-# Real NYC Open Data reference cases (BBL/BIN from live Socrata rows — not synthetic).
 REAL_NYC_CASES: list[CreateCaseRequest] = [
     CreateCaseRequest(
         address="43-30 PARSONS BOULEVARD, QUEENS",
@@ -34,30 +32,29 @@ REAL_NYC_CASES: list[CreateCaseRequest] = [
     ),
 ]
 
-_CRITIC_DEMO_CITATION = Citation(
-    code="DEP Rules",
-    excerpt="Mis-cited ordinance for demo — DEP code cited on a building review.",
-    source_url="https://github.com/BetaNYC/nyc-charter-laws-rules",
-)
 
-
-async def _resolve_bin(payload: CreateCaseRequest, socrata: SocrataClient) -> CreateCaseRequest:
-    if payload.bin:
-        return payload
-    rows = await socrata.pluto_by_bbl(payload.bbl)
-    if not rows:
-        return payload
-    bin_ = str(rows[0].get("bin") or "")
-    return payload.model_copy(update={"bin": bin_})
+def _init_steps() -> list[DepartmentStep]:
+    return [
+        DepartmentStep(name="distribution", department=dept, status="pending")
+        for dept in (
+            Department.ZONING,
+            Department.BUILDING,
+            Department.FIRE,
+            Department.UTILITIES,
+            Department.LANDMARKS,
+            Department.HOUSING,
+            Department.CRITIC,
+        )
+    ]
 
 
 async def ensure_seeded(store: FirestoreStore, engine: DistributionEngine) -> None:
     socrata = SocrataClient()
     existing = {c.bbl: c for c in store.list_cases()}
-    bootstrap_clerk = os.environ.get("CLERK_BOOTSTRAP_USERNAME", "maria").strip()
+    bootstrap_clerk = get_settings().clerk_bootstrap_username
 
     for payload in REAL_NYC_CASES:
-        resolved = await _resolve_bin(payload, socrata)
+        resolved = await resolve_parcel(payload, socrata)
         case = existing.get(resolved.bbl)
         if case is None:
             case = store.create_case(resolved)
@@ -69,35 +66,26 @@ async def ensure_seeded(store: FirestoreStore, engine: DistributionEngine) -> No
                 detail=f"Case created for BBL {case.bbl} with live NYC Open Data keys.",
             )
 
-        runner = WorkflowRunner(store, engine)
-        await runner.run_all(case.id, bbl=case.bbl, bin_=case.bin, work_type=case.work_type)
-
-        if case.bbl == "3014930048":
-            reviews = store.list_distribution(case.id)
-            patched = []
-            for review in reviews:
-                if review.department == Department.BUILDING:
-                    patched.append(
-                        review.model_copy(
-                            update={
-                                "status": ReviewStatus.FAIL,
-                                "summary": "Seeded demo: building review with mis-cited ordinance for Critic.",
-                                "citations": [_CRITIC_DEMO_CITATION],
-                            }
-                        )
-                    )
-                elif review.department != Department.CRITIC:
-                    patched.append(review)
-            critic = await engine.review_critic(reviews=patched)
-            store.save_distribution(case.id, patched + [critic])
-            steps = runner.get_steps(case.id)
-            for step in steps:
-                if step.department == Department.BUILDING:
-                    step.detail = "Seeded demo: mis-cited ordinance (Critic demo)"
-                if step.department == Department.CRITIC:
-                    step.detail = critic.summary
-                    step.status = StepStatus.COMPLETED if critic.status != ReviewStatus.FAIL else StepStatus.FAILED
-            store.save_workflow_steps(case.id, steps)
+        store.save_workflow_steps(case.id, _init_steps())
+        reviews = await engine.run_all(bbl=case.bbl, bin_=case.bin, work_type=case.work_type)
+        store.save_distribution(case.id, reviews)
+        steps = []
+        for review in reviews:
+            steps.append(
+                DepartmentStep(
+                    name="distribution",
+                    department=review.department,
+                    status="completed",
+                    detail=review.summary,
+                )
+            )
+        store.save_workflow_steps(case.id, steps)
+        store.append_audit(
+            case.id,
+            actor="system",
+            action="distribution_refreshed",
+            detail=f"Seeded live NYC Open Data reviews for {len(reviews)} departments",
+        )
 
         open_tasks = store.list_tasks(case.id, status="open")
         if not open_tasks:
@@ -105,9 +93,9 @@ async def ensure_seeded(store: FirestoreStore, engine: DistributionEngine) -> No
                 case.id,
                 title=f"Review distribution — BIN {case.bin or case.bbl}",
                 task_type="distribution_review",
-                assignee=bootstrap_clerk,
+                assignee=bootstrap_clerk or None,
             )
         else:
             for task in open_tasks:
-                if not task.assignee:
+                if not task.assignee and bootstrap_clerk:
                     store.assign_task(task.id, bootstrap_clerk)

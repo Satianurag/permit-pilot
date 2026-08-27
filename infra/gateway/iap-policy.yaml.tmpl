@@ -1,0 +1,10 @@
+name: permit-pilot-iap-policy
+target:
+  resources:
+    - projects/PROJECT_ID/locations/LOCATION/agentGateways/permit-pilot-egress
+policyProfile: REQUEST_AUTHZ
+action: CUSTOM
+customProvider:
+  authzExtension:
+    resources:
+      - projects/PROJECT_ID/locations/LOCATION/authzExtensions/permit-pilot-iap

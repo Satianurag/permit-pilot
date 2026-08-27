@@ -54,7 +54,7 @@ export default function ConfirmDialog({
           ref={cancelRef}
           type="button"
           onClick={onCancel}
-          className="px-4 py-2 text-sm rounded-md border border-pp-border"
+          className="pp-btn-secondary"
         >
           Cancel
         </button>
@@ -62,9 +62,7 @@ export default function ConfirmDialog({
           type="button"
           disabled={busy}
           onClick={onConfirm}
-          className={`px-4 py-2 text-sm rounded-md text-white disabled:opacity-50 ${
-            danger ? "bg-red-700" : "bg-emerald-700"
-          }`}
+          className={`pp-btn-primary disabled:opacity-50 ${danger ? "bg-red-700 hover:bg-red-800" : ""}`}
         >
           {busy ? "Saving…" : confirmLabel}
         </button>

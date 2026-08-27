@@ -10,6 +10,8 @@ from permit_pilot_core.models import (
     ReviewStatus,
 )
 from permit_pilot_core.distribution.ordinance_index import citation_valid_for_department, is_known_citation
+from permit_pilot_core.settings import get_settings
+from permit_pilot_core.socrata import datasets as ds
 from permit_pilot_core.socrata.client import SocrataClient
 
 BOROUGH_NAMES = {
@@ -20,21 +22,32 @@ BOROUGH_NAMES = {
     "SI": "STATEN ISLAND",
 }
 
-_BUILDING_FAIL_CITATION = Citation(
-    code="1 RCNY 101-07",
-    excerpt="Open DOB violations must be resolved or dismissed before permit approval.",
-    source_url="https://github.com/BetaNYC/nyc-charter-laws-rules",
-)
-_FIRE_FAIL_CITATION = Citation(
-    code="FC 901.7",
-    excerpt="Open fire code violations require correction or documented clearance before approval.",
-    source_url="https://github.com/BetaNYC/nyc-charter-laws-rules",
-)
-_HOUSING_FAIL_CITATION = Citation(
-    code="HMC §27-2115",
-    excerpt="Class A or B HPD violations must be corrected before related permit work proceeds.",
-    source_url="https://github.com/BetaNYC/nyc-charter-laws-rules",
-)
+def _citation_url() -> str:
+    return get_settings().citation_source_url
+
+
+def _building_fail_citation() -> Citation:
+    return Citation(
+        code="1 RCNY 101-07",
+        excerpt="Open DOB violations must be resolved or dismissed before permit approval.",
+        source_url=_citation_url(),
+    )
+
+
+def _fire_fail_citation() -> Citation:
+    return Citation(
+        code="FC 901.7",
+        excerpt="Open fire code violations require correction or documented clearance before approval.",
+        source_url=_citation_url(),
+    )
+
+
+def _housing_fail_citation() -> Citation:
+    return Citation(
+        code="HMC §27-2115",
+        excerpt="Class A or B HPD violations must be corrected before related permit work proceeds.",
+        source_url=_citation_url(),
+    )
 
 
 def _house_number(address: str) -> str:
@@ -111,13 +124,13 @@ class DistributionEngine:
         evidence = [
             EvidenceItem(
                 source="NYC Open Data",
-                dataset_id="64uk-42ks",
+                dataset_id=ds.PLUTO,
                 label="zonedist1",
                 value=district,
             ),
             EvidenceItem(
                 source="NYC Open Data",
-                dataset_id="64uk-42ks",
+                dataset_id=ds.PLUTO,
                 label="landuse",
                 value=landuse,
             ),
@@ -139,7 +152,7 @@ class DistributionEngine:
         if active_violations:
             status = ReviewStatus.FAIL
             summary = f"{len(active_violations)} active DOB violation(s) on BIN — must be resolved before approval."
-            citations = [_BUILDING_FAIL_CITATION]
+            citations = [_building_fail_citation()]
         else:
             status = ReviewStatus.PASS
             summary = f"{len(permits)} permits on record; no active DOB violations on BIN."
@@ -156,13 +169,13 @@ class DistributionEngine:
             evidence=[
                 EvidenceItem(
                     source="NYC Open Data",
-                    dataset_id="rbx6-tga4",
+                    dataset_id=ds.PERMITS,
                     label="permit_count",
                     value=len(permits),
                 ),
                 EvidenceItem(
                     source="NYC Open Data",
-                    dataset_id="3h2n-5cm9",
+                    dataset_id=ds.DOB_VIOLATIONS,
                     label="active_violation_count",
                     value=len(active_violations),
                 ),
@@ -184,7 +197,7 @@ class DistributionEngine:
         if open_rows:
             status = ReviewStatus.FAIL
             summary = f"{len(open_rows)} open FDNY violation record(s) on BIN."
-            citations = [_FIRE_FAIL_CITATION]
+            citations = [_fire_fail_citation()]
         else:
             status = ReviewStatus.PASS
             historical = len(rows)
@@ -205,7 +218,7 @@ class DistributionEngine:
             evidence=[
                 EvidenceItem(
                     source="NYC Open Data",
-                    dataset_id="bi53-yph3",
+                    dataset_id=ds.FDNY_VIOLATIONS,
                     label="open_violation_count",
                     value=len(open_rows),
                 )
@@ -228,7 +241,7 @@ class DistributionEngine:
         if class_a:
             status = ReviewStatus.FAIL
             summary = f"{len(class_a)} open Class A HPD violation(s) on BIN."
-            citations = [_HOUSING_FAIL_CITATION]
+            citations = [_housing_fail_citation()]
         elif open_rows:
             status = ReviewStatus.NEEDS_INFO
             summary = f"{len(open_rows)} open HPD violation(s) — confirm correction before approval."
@@ -248,7 +261,7 @@ class DistributionEngine:
             evidence=[
                 EvidenceItem(
                     source="NYC Open Data",
-                    dataset_id="wvxf-dwi5",
+                    dataset_id=ds.HPD_VIOLATIONS,
                     label="open_hpd_violation_count",
                     value=len(open_rows),
                 )
@@ -291,7 +304,7 @@ class DistributionEngine:
                 Citation(
                     code="DEP Rules",
                     excerpt="Open DEP ECB violations must be resolved before permit approval.",
-                    source_url="https://github.com/BetaNYC/nyc-charter-laws-rules",
+                    source_url=_citation_url(),
                 )
             )
         return DepartmentReview(
@@ -305,13 +318,13 @@ class DistributionEngine:
             evidence=[
                 EvidenceItem(
                     source="NYC Open Data",
-                    dataset_id="skr7-cxt3",
+                    dataset_id=ds.DEP_ECB,
                     label="dep_ecb_record_count",
                     value=len(rows),
                 ),
                 EvidenceItem(
                     source="NYC Open Data",
-                    dataset_id="skr7-cxt3",
+                    dataset_id=ds.DEP_ECB,
                     label="open_dep_ecb_count",
                     value=len(open_rows),
                 ),
@@ -333,7 +346,7 @@ class DistributionEngine:
                 Citation(
                     code="NYC LPC",
                     excerpt="Work affecting landmark properties requires Landmarks Preservation Commission approval.",
-                    source_url="https://github.com/BetaNYC/nyc-charter-laws-rules",
+                    source_url=_citation_url(),
                 )
             ]
         elif in_landmark:
@@ -355,7 +368,7 @@ class DistributionEngine:
             evidence=[
                 EvidenceItem(
                     source="NYC Open Data",
-                    dataset_id="gpmc-yuvp",
+                    dataset_id=ds.LANDMARKS,
                     label="landmark_row_count",
                     value=len(rows),
                 )
@@ -408,7 +421,7 @@ class DistributionEngine:
                     Citation(
                         code="NYC Admin Code §28-105",
                         excerpt="Department determinations must reference applicable code sections.",
-                        source_url="https://github.com/BetaNYC/nyc-charter-laws-rules",
+                        source_url=_citation_url(),
                     )
                 ],
                 updated_at=_now(),
@@ -429,7 +442,7 @@ class DistributionEngine:
                     Citation(
                         code="NYC Admin Code §28-105",
                         excerpt="Department findings must be grounded in verifiable evidence.",
-                        source_url="https://github.com/BetaNYC/nyc-charter-laws-rules",
+                        source_url=_citation_url(),
                     )
                 ],
                 updated_at=_now(),
@@ -450,7 +463,7 @@ class DistributionEngine:
                     Citation(
                         code="NYC Admin Code §28-105",
                         excerpt="Cited code sections must exist and match the reviewing department.",
-                        source_url="https://github.com/BetaNYC/nyc-charter-laws-rules",
+                        source_url=_citation_url(),
                     )
                 ],
                 updated_at=_now(),

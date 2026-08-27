@@ -1,10 +1,10 @@
-import { useEffect, useState } from "react";
+import { useInfiniteQuery } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router-dom";
 import ActivityFeed from "../components/ActivityFeed";
 import EmptyState from "../components/EmptyState";
 import PageHeader from "../components/PageHeader";
 import Skeleton from "../components/Skeleton";
-import { api, ActivityFeedResponse } from "../lib/api";
+import { api } from "../lib/api";
 import { errorMessage } from "../lib/errors";
 import { formatStatus } from "../lib/formatStatus";
 
@@ -13,34 +13,18 @@ const PAGE_SIZE = 50;
 export default function ActivityPage() {
   const [params, setParams] = useSearchParams();
   const actionFilter = params.get("action") ?? "";
-  const [feed, setFeed] = useState<ActivityFeedResponse | null>(null);
-  const [items, setItems] = useState<ActivityFeedResponse["items"]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
+  const query = useInfiniteQuery({
+    queryKey: ["activity", actionFilter],
+    queryFn: ({ pageParam }) => api.listActivity(PAGE_SIZE, pageParam, actionFilter || undefined),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, pages) => {
+      const loaded = pages.reduce((sum, page) => sum + page.items.length, 0);
+      return loaded < lastPage.total ? loaded : undefined;
+    },
+  });
 
-  const load = (offset = 0, append = false) => {
-    if (append) setLoadingMore(true);
-    else setLoading(true);
-
-    api
-      .listActivity(PAGE_SIZE, offset, actionFilter || undefined)
-      .then((response) => {
-        setFeed(response);
-        setItems((current) => (append ? [...current, ...response.items] : response.items));
-        setError(null);
-      })
-      .catch((err: Error) => setError(err.message))
-      .finally(() => {
-        setLoading(false);
-        setLoadingMore(false);
-      });
-  };
-
-  useEffect(() => {
-    load(0, false);
-  }, [actionFilter]);
-
+  const items = query.data?.pages.flatMap((page) => page.items) ?? [];
+  const feed = query.data?.pages.at(-1);
   const setActionFilter = (action: string) => {
     const next = new URLSearchParams(params);
     if (action) next.set("action", action);
@@ -48,15 +32,13 @@ export default function ActivityPage() {
     setParams(next, { replace: true });
   };
 
-  const hasMore = feed ? items.length < feed.total : false;
-
   return (
     <div className="space-y-6">
       <PageHeader
         title="Recent activity"
-        subtitle="Cross-case audit trail from Firestore — every clerk action, workflow step, and distribution event. Per-case trace replay stays on each dossier's Audit tab."
+        subtitle="Cross-case audit trail from Firestore — every clerk action, fleet enqueue, and distribution event. Per-case trace replay stays on each dossier's Audit tab."
         action={
-          <button type="button" className="pp-btn-secondary" onClick={() => load(0, false)} disabled={loading}>
+          <button type="button" className="pp-btn-secondary" onClick={() => void query.refetch()} disabled={query.isFetching}>
             Refresh
           </button>
         }
@@ -70,7 +52,7 @@ export default function ActivityPage() {
               className="pp-select"
               value={actionFilter}
               onChange={(e) => setActionFilter(e.target.value)}
-              disabled={loading && !feed}
+              disabled={query.isLoading && !feed}
             >
               <option value="">All actions</option>
               {(feed?.actions ?? []).map((action) => (
@@ -88,13 +70,13 @@ export default function ActivityPage() {
         </div>
       </div>
 
-      {error && (
+      {query.error && (
         <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-xl p-3" role="alert">
-          {errorMessage(error)}
+          {errorMessage(query.error)}
         </p>
       )}
 
-      {loading && !feed ? (
+      {query.isLoading && !feed ? (
         <Skeleton rows={8} label="Loading activity feed" />
       ) : items.length === 0 ? (
         <EmptyState
@@ -119,15 +101,15 @@ export default function ActivityPage() {
       ) : (
         <div className="pp-panel max-w-5xl">
           <ActivityFeed items={items} />
-          {hasMore && (
+          {query.hasNextPage && (
             <div className="mt-6 flex justify-center">
               <button
                 type="button"
                 className="pp-btn-secondary"
-                disabled={loadingMore}
-                onClick={() => load(items.length, true)}
+                disabled={query.isFetchingNextPage}
+                onClick={() => void query.fetchNextPage()}
               >
-                {loadingMore ? "Loading…" : `Load more (${feed!.total - items.length} remaining)`}
+                {query.isFetchingNextPage ? "Loading…" : `Load more (${(feed?.total ?? 0) - items.length} remaining)`}
               </button>
             </div>
           )}

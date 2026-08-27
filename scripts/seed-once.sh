@@ -2,7 +2,7 @@
 # One-time: load real NYC reference cases into Firestore (live Socrata pulls).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-export GOOGLE_CLOUD_PROJECT="${GOOGLE_CLOUD_PROJECT:-gen-lang-client-0233250350}"
+export GOOGLE_CLOUD_PROJECT="${GOOGLE_CLOUD_PROJECT:?Set GOOGLE_CLOUD_PROJECT}"
 cd "$ROOT/services/api"
 exec .venv/bin/python -c "
 import asyncio

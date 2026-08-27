@@ -166,18 +166,31 @@ class AuditEvent(BaseModel):
     at: datetime
 
 
+class DepartmentStep(BaseModel):
+    name: str
+    department: Department | None = None
+    status: str = "pending"
+    detail: str = ""
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    session_id: str | None = None
+    engine_id: str | None = None
+
+
 class CaseBundle(BaseModel):
     case: Case
     distribution: list[DepartmentReview]
     claims: list[Claim]
     audit: list[AuditEvent]
-    workflow: list[Any]
+    workflow: list[DepartmentStep]
     trace: list[Any]
     observability: dict[str, str | None]
     document: IntakeDocument | None = None
     related_permits: list[RelatedPermit] = Field(default_factory=list)
     parcel: ParcelContext | None = None
     briefing: ClerkBriefing | None = None
+    memories: list[dict[str, Any]] = Field(default_factory=list)
+    fleet_run_id: str | None = None
 
 
 class CaseDecision(BaseModel):

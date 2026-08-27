@@ -88,19 +88,8 @@
     );
   }
 
-  function disableMaps() {
-    while (maps.length) {
-      maps.pop()?.remove();
-    }
-    casesMap = null;
-    mapsInitialized = false;
-  }
-
   function applyConsent(consent) {
-    document.body.classList.toggle("pp-maps-disabled", !consent.functional);
     if (functionalToggle) functionalToggle.checked = consent.functional;
-    if (consent.functional) initMaps();
-    else disableMaps();
   }
 
   function hideBanner() {
@@ -409,12 +398,14 @@
   // Resize maps
   window.addEventListener("resize", () => maps.forEach((m) => m.resize()));
 
+  // NYC reference maps use public CARTO tiles — always render regardless of cookie choice.
+  initMaps();
+
   const existingConsent = readConsent();
   if (existingConsent) {
     applyConsent(existingConsent);
     hideBanner();
   } else {
-    document.body.classList.add("pp-maps-disabled");
     requestAnimationFrame(showBanner);
   }
 

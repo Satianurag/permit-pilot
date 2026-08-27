@@ -4,9 +4,13 @@ from typing import Any
 
 import httpx
 
+from permit_pilot_core.settings import get_settings
 from permit_pilot_core.socrata import datasets as ds
 
-TIMEOUT = httpx.Timeout(30.0, connect=10.0)
+
+def _timeout() -> httpx.Timeout:
+    seconds = get_settings().socrata_timeout_seconds
+    return httpx.Timeout(seconds, connect=min(10.0, seconds))
 
 BOROUGH_TO_CODE: dict[str, str] = {
     "MANHATTAN": "MN",
@@ -34,12 +38,12 @@ def borough_label(code: str) -> str:
 
 
 class SocrataClient:
-    def __init__(self, base_url: str = ds.NYC_OPEN_DATA_BASE) -> None:
-        self._base = base_url.rstrip("/")
+    def __init__(self, base_url: str | None = None) -> None:
+        self._base = (base_url or get_settings().nyc_open_data_base).rstrip("/")
 
     async def _get(self, dataset_id: str, params: dict[str, str]) -> list[dict[str, Any]]:
         url = f"{self._base}/{dataset_id}.json"
-        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=_timeout()) as client:
             response = await client.get(url, params=params)
             response.raise_for_status()
             data = response.json()

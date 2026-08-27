@@ -1,87 +1,75 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
-from permit_pilot_core.agents.registry import list_agent_cards
-from permit_pilot_core.distribution.engine import DistributionEngine
-from permit_pilot_core.security.agent_gateway import agent_fingerprint, verify_agent_signature
-from permit_pilot_core.socrata.client import SocrataClient
-from permit_pilot_api.auth import ClerkUser, clerk_actor, get_current_user
-from permit_pilot_api.deps import engine_from_request, store_from_request
+from permit_pilot_core.platform import memory as memory_bank
+from permit_pilot_core.platform import registry
+from permit_pilot_core.platform.armor import sanitize_user_prompt
+from permit_pilot_core.platform.fleet import FLEET
+from permit_pilot_core.platform.identity import agent_iap_principal, agent_spiffe
+from permit_pilot_core.settings import get_settings
+from permit_pilot_api.auth import ClerkUser, get_current_user
+from permit_pilot_api.config import gcp_project_id, observability_links
 
-router = APIRouter(tags=["agents"])
-
-
-async def _run_agent_action(
-    agent_name: str,
-    case_id: str | None,
-    engine: DistributionEngine,
-    store,
-) -> str:
-    if not case_id:
-        return "Fingerprint verified — attach X-Case-Id to run live Open Data tools."
-    case = store.get_case(case_id)
-    if not case:
-        return "Fingerprint verified — case not found for live tools."
-    socrata = SocrataClient()
-    if agent_name == "zoning_agent":
-        rows = await socrata.pluto_by_bbl(case.bbl)
-        zones = [str(row.get("zonedist1") or row.get("zonedist") or "") for row in rows[:3]]
-        return f"PLUTO zoning for BBL {case.bbl}: {', '.join(zones) or 'no rows'}"
-    if agent_name == "building_agent":
-        rows = await socrata.permits_by_bbl(case.bbl)
-        return f"DOB permits on BBL {case.bbl}: {len(rows)} recent filing rows"
-    if agent_name == "distribution_agent":
-        reviews = await engine.run_all(bbl=case.bbl, bin_=case.bin, work_type=case.work_type)
-        summary = ", ".join(f"{r.department.value}:{r.status.value}" for r in reviews)
-        return f"Distribution orchestrator ran {len(reviews)} departments — {summary}"
-    if agent_name == "critic_agent":
-        reviews = store.list_distribution(case_id)
-        critic = await engine.review_critic(reviews=reviews)
-        return f"Critic policy check: {critic.status.value} — {critic.summary}"
-    return "Fingerprint verified against allowlist."
+router = APIRouter(tags=["agents"], dependencies=[Depends(get_current_user)])
 
 
 @router.get("/agents")
-def get_agents(_user: Annotated[ClerkUser, Depends(get_current_user)]):
-    return list_agent_cards()
+def get_agents():
+    live = registry.catalog()
+    settings = get_settings()
+    cards = []
+    for spec in FLEET:
+        engine_id = settings.engine_id_map.get(spec.name, "")
+        cards.append(
+            {
+                "name": spec.name,
+                "description": spec.description,
+                "skills": [spec.department] if spec.department else ["orchestration"],
+                "tools": spec.tools,
+                "engine_id": engine_id,
+                "identity_type": "AGENT_IDENTITY",
+                "signed": bool(engine_id),
+                "spiffe": agent_spiffe(engine_id) if engine_id else "",
+                "iap_principal": agent_iap_principal(engine_id) if engine_id else "",
+            }
+        )
+    return {"agents": cards, "registry": live}
 
 
-@router.post("/agents/{agent_name}/invoke")
-async def invoke_agent(
-    agent_name: str,
-    request: Request,
-    current_user: Annotated[ClerkUser, Depends(get_current_user)],
-    x_agent_signature: str | None = Header(default=None),
-    x_case_id: str | None = Header(default=None),
-):
-    if not verify_agent_signature(agent_name, x_agent_signature):
-        if x_case_id:
-            store = store_from_request(request)
-            if store.get_case(x_case_id):
-                store.append_audit(
-                    x_case_id,
-                    actor=clerk_actor(current_user),
-                    action="agent_rejected",
-                    detail=f"Fingerprint gateway blocked untrusted agent: {agent_name}",
-                )
-        raise HTTPException(
-            status_code=403,
-            detail=f"Gateway blocked agent — fingerprint not on allowlist: {agent_name}",
-        )
-    store = store_from_request(request)
-    engine = engine_from_request(request)
-    if x_case_id and store.get_case(x_case_id):
-        store.append_audit(
-            x_case_id,
-            actor=clerk_actor(current_user),
-            action="agent_authorized",
-            detail=f"Fingerprint gateway admitted agent: {agent_name}",
-        )
-    message = await _run_agent_action(agent_name, x_case_id, engine, store)
+@router.get("/governance")
+def get_governance():
+    settings = get_settings()
+    live = registry.catalog()
+    links = observability_links(case_id=None, project_id=gcp_project_id())
     return {
-        "agent": agent_name,
-        "status": "authorized",
-        "message": message,
-        "fingerprint": agent_fingerprint(agent_name),
+        "gateway": settings.agent_gateway_name,
+        "gateway_resource": (
+            f"projects/{settings.project_id}/locations/{settings.region}/"
+            f"agentGateways/{settings.agent_gateway_name}"
+        ),
+        "model_armor_template": settings.model_armor_template,
+        "vertex_model": settings.vertex_model,
+        "vertex_location": settings.vertex_location,
+        "mcp_tools_url": settings.mcp_tools_url,
+        "registry": live,
+        "engines": settings.engine_id_map,
+        "console": links,
     }
+
+
+@router.get("/memory/{bbl}")
+def get_parcel_memory(bbl: str, q: str | None = None):
+    try:
+        memories = memory_bank.retrieve(bbl=bbl, query=q)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Memory Bank unavailable: {exc}") from exc
+    return {"bbl": bbl, "memories": memories}
+
+
+@router.post("/armor/inspect")
+async def inspect_text(request: Request, _user: Annotated[ClerkUser, Depends(get_current_user)]):
+    body = await request.json()
+    text = str(body.get("text") or "")
+    verdict = sanitize_user_prompt(text)
+    return verdict

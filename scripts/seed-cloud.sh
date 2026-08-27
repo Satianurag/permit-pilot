@@ -2,7 +2,7 @@
 # Seed NYC reference cases into Cloud Firestore (run after deploy).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-PROJECT="${GOOGLE_CLOUD_PROJECT:-gen-lang-client-0233250350}"
+PROJECT="${GOOGLE_CLOUD_PROJECT:?Set GOOGLE_CLOUD_PROJECT}"
 export GOOGLE_CLOUD_PROJECT="$PROJECT"
 
 cd "$ROOT/services/api"
@@ -22,7 +22,7 @@ async def main():
     engine = DistributionEngine()
     await ensure_seeded(store, engine)
     open_tasks = store.list_tasks(status='open')
-    print(f'Cloud Firestore ready: {store.count_cases()} cases, {len(open_tasks)} open tasks')
+    print(f'Cloud Firestore ready: {len(store.list_cases())} cases, {len(open_tasks)} open tasks')
 
 asyncio.run(main())
 "

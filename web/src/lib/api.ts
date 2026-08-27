@@ -99,8 +99,12 @@ export interface AgentCard {
   description: string;
   skills: string[];
   tools: string[];
+  engine_id?: string;
+  identity_type?: string;
   signed: boolean;
-  fingerprint: string;
+  fingerprint?: string;
+  spiffe?: string;
+  iap_principal?: string;
 }
 
 export interface WorkflowStep {
@@ -161,11 +165,18 @@ export interface CaseBundle {
     cloud_trace_url: string | null;
     langfuse_url: string | null;
     gcp_workflows_url: string | null;
+    agent_gateway_url?: string | null;
+    agent_registry_url?: string | null;
+    model_armor_url?: string | null;
+    topology_url?: string | null;
+    agent_observability_url?: string | null;
   };
   document: IntakeDocument | null;
   related_permits: RelatedPermit[];
   parcel: ParcelContext | null;
   briefing: ClerkBriefing | null;
+  memories?: Record<string, unknown>[];
+  fleet_run_id?: string | null;
 }
 
 export interface AuditEvent {
@@ -261,8 +272,8 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-async function get<T>(path: string): Promise<T> {
-  return request<T>(path);
+async function get<T>(path: string, init: RequestInit = {}): Promise<T> {
+  return request<T>(path, init);
 }
 
 async function post<T>(path: string, body?: unknown): Promise<T> {
@@ -312,14 +323,14 @@ export const api = {
   updateCase: (id: string, patch: Partial<Pick<Case, "address" | "bbl" | "bin" | "work_type" | "owner" | "borough">>) =>
     request<Case>(`/cases/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   getCase: (id: string) => get<Case>(`/cases/${id}`),
-  getCaseBundle: (id: string) => get<CaseBundle>(`/cases/${id}/bundle`),
+  getCaseBundle: (id: string, init?: RequestInit) => get<CaseBundle>(`/cases/${id}/bundle`, init),
   getCaseContext: (id: string) =>
     get<{ related_permits: RelatedPermit[]; parcel: ParcelContext | null }>(`/cases/${id}/context`),
   getPlanPdf: (id: string) =>
     get<{ filename: string; content_type: string; pdf_base64: string }>(`/cases/${id}/documents/pdf`),
-  refreshDistribution: (id: string) => post<DepartmentReview[]>(`/cases/${id}/distribution/refresh`),
+  refreshDistribution: (id: string) => post<{ queued: boolean; task?: string; reason?: string }>(`/cases/${id}/distribution/refresh`),
   refreshBinDepartments: (id: string) =>
-    post<DepartmentReview[]>(`/cases/${id}/distribution/refresh-bin-departments`),
+    post<{ queued: boolean; task?: string; reason?: string }>(`/cases/${id}/distribution/refresh-bin-departments`),
   intake: (payload: IntakePayload) => post<Case>("/cases/intake", payload),
   previewRedaction: (packetText: string) =>
     post<{ redacted_text: string; findings: string[] }>("/cases/intake/preview-redaction", {
@@ -333,17 +344,15 @@ export const api = {
   decide: (id: string, decision: string, note: string, override = false) =>
     post<Case>(`/cases/${id}/decision`, { decision, note, override }),
   orchestrate: (id: string) => post<{ summary: string; model: string }>(`/cases/${id}/orchestrate`),
-  resumeWorkflow: (id: string) => post<{ step: unknown; steps: WorkflowStep[] }>(`/cases/${id}/workflow/resume`),
-  interruptWorkflow: (id: string) => post<{ step: WorkflowStep; steps: WorkflowStep[] }>(`/cases/${id}/workflow/interrupt`),
-  startGcpWorkflow: (id: string) => post<{ execution_id: string; case_id: string }>(`/cases/${id}/workflow/gcp-run`),
-  listAgents: () => get<AgentCard[]>("/agents"),
-  invokeAgent: (name: string, signature: string | null, caseId?: string) =>
-    request<{ status: string; message: string }>(`/agents/${name}/invoke`, {
-      method: "POST",
-      headers: {
-        ...(signature ? { "X-Agent-Signature": signature } : {}),
-        ...(caseId ? { "X-Case-Id": caseId } : {}),
-      },
-    }),
+  runFleet: (id: string) => post<{ queued: boolean; task?: string; departments?: number }>(`/cases/${id}/fleet/run`),
+  listAgents: () => get<{ agents: AgentCard[]; registry: Record<string, unknown> }>("/agents"),
+  getGovernance: () => get<Record<string, unknown>>("/governance"),
+  getParcelMemory: (bbl: string, q?: string) =>
+    get<{ bbl: string; memories: Record<string, unknown>[] }>(
+      `/memory/${encodeURIComponent(bbl)}${q ? `?q=${encodeURIComponent(q)}` : ""}`,
+    ),
+  inspectArmor: (text: string) => post<{ blocked: boolean; findings: string[] }>("/armor/inspect", { text }),
+  getObservability: (caseId?: string) =>
+    get<Record<string, string | null>>(`/config/observability${caseId ? `?case_id=${encodeURIComponent(caseId)}` : ""}`),
   consumeReturnPath,
 };

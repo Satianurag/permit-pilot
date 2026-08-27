@@ -5,6 +5,7 @@ import { useToast } from "./Toast";
 import { api, AddressMatch, IntakePayload } from "../lib/api";
 import { errorMessage } from "../lib/errors";
 import { BOROUGH_BY_DIGIT, bblError, binError, boroughFromBbl, digitsOnly } from "../lib/nyc";
+import { useInvalidateCase } from "../lib/useCaseBundle";
 
 const EMPTY_FORM: IntakePayload = {
   address: "",
@@ -48,6 +49,7 @@ function readFileAsBase64(file: File): Promise<string> {
 export default function IntakeModal({ open, onClose, onCreated }: Props) {
   const navigate = useNavigate();
   const { push } = useToast();
+  const invalidate = useInvalidateCase();
   const firstFieldRef = useRef<HTMLInputElement>(null);
   const [form, setForm] = useState<IntakePayload>(EMPTY_FORM);
   const [lookupBorough, setLookupBorough] = useState("Manhattan");
@@ -168,6 +170,7 @@ export default function IntakeModal({ open, onClose, onCreated }: Props) {
       push(`Case created for ${created.address}. Distribution is running.`, "success");
       onClose();
       onCreated?.();
+      await invalidate(created.id);
       navigate(`/cases/${created.id}?tab=distribution&from=tasks`);
     } catch (err) {
       setError(errorMessage(err));

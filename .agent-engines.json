@@ -1,0 +1,10 @@
+{
+  "zoning_agent": "501242612091453440",
+  "building_agent": "5112928630518841344",
+  "fire_agent": "1494286329926647808",
+  "utilities_agent": "2097768679994294272",
+  "landmarks_agent": "4072034166642835456",
+  "housing_agent": "8197331425314209792",
+  "critic_agent": "9125072948552531968",
+  "permit_orchestrator": "3804069988814290944"
+}

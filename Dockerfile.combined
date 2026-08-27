@@ -16,10 +16,7 @@ RUN pip install --no-cache-dir --retries 5 -e /app/packages/permit_pilot_core -e
 COPY --from=web-build /app/dist /app/static
 
 ENV PORT=8080
-ENV GOOGLE_CLOUD_PROJECT=gen-lang-client-0233250350
-ENV SEED_ON_STARTUP=false
 ENV STATIC_ROOT=/app/static
-ENV PERMIT_PILOT_URL=https://permit-pilot-538666547847.us-central1.run.app
 EXPOSE 8080
 
-CMD ["uvicorn", "permit_pilot_api.main:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["uvicorn", "permit_pilot_api.main:app", "--host", "0.0.0.0", "--port", "8080", "--proxy-headers", "--forwarded-allow-ips", "*"]

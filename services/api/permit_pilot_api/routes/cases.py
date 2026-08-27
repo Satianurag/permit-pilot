@@ -9,8 +9,6 @@ from permit_pilot_core.decisions import (
     failed_review_departments,
     needs_info_departments,
 )
-from permit_pilot_core.distribution.engine import DistributionEngine
-from permit_pilot_core.firestore.store import FirestoreStore
 from permit_pilot_core.models import (
     Case,
     CaseBundle,
@@ -20,13 +18,12 @@ from permit_pilot_core.models import (
     ClaimResponseRequest,
     ClerkBriefing,
     CaseUpdateRequest,
-    CreateCaseRequest,
-    Department,
-    IntakeDocument,
     ParcelContext,
     RelatedPermit,
 )
-from permit_pilot_core.workflow.runner import WorkflowRunner
+from permit_pilot_core.platform import memory as memory_bank
+from permit_pilot_core.platform.tasks import enqueue_distribution
+from permit_pilot_core.settings import get_settings
 from permit_pilot_api.auth import ClerkUser, clerk_actor, get_current_user
 from permit_pilot_api.config import gcp_project_id, observability_links
 from permit_pilot_api.deps import engine_from_request, store_from_request
@@ -65,10 +62,19 @@ def _briefing_from_store(raw: dict | None) -> ClerkBriefing | None:
 
     return ClerkBriefing(
         summary=str(raw.get("summary") or ""),
-        model=str(raw.get("model") or "vertex"),
+        model=str(raw.get("model") or get_settings().vertex_model),
         generated_at=datetime.fromisoformat(str(raw["generated_at"])),
         generated_by=str(raw.get("generated_by") or "system"),
     )
+
+
+def _queue_distribution(*, store, case_id: str, actor: str, reason: str, action: str) -> dict[str, str | bool]:
+    try:
+        task_name = enqueue_distribution(case_id=case_id, reason=reason)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Cloud Tasks enqueue failed") from exc
+    store.append_audit(case_id, actor=actor, action=action, detail=task_name)
+    return {"queued": True, "task": task_name, "reason": reason}
 
 
 @router.get("")
@@ -125,6 +131,11 @@ def get_case_bundle(case_id: str, request: Request) -> CaseBundle:
     case = store.get_case(case_id)
     if not case:
         raise HTTPException(status_code=404, detail="Case not found")
+    memories: list = []
+    try:
+        memories = memory_bank.retrieve(bbl=case.bbl, query=case.work_type)
+    except Exception:
+        memories = []
     return CaseBundle(
         case=case,
         distribution=store.list_distribution(case_id),
@@ -137,7 +148,16 @@ def get_case_bundle(case_id: str, request: Request) -> CaseBundle:
         related_permits=[],
         parcel=None,
         briefing=_briefing_from_store(store.get_briefing(case_id)),
+        memories=memories,
     )
+
+
+@router.get("/{case_id}/trace")
+def get_case_trace(case_id: str, request: Request):
+    store = store_from_request(request)
+    if not store.get_case(case_id):
+        raise HTTPException(status_code=404, detail="Case not found")
+    return store.list_trace_spans(case_id)
 
 
 @router.get("/{case_id}/context")
@@ -182,67 +202,23 @@ def get_plan_pdf(case_id: str, request: Request):
     return pdf
 
 
-@router.post("")
-async def create_case(
-    payload: CreateCaseRequest,
-    request: Request,
-    current_user: Annotated[ClerkUser, Depends(get_current_user)],
-) -> Case:
-    store: FirestoreStore = store_from_request(request)
-    engine: DistributionEngine = engine_from_request(request)
-    case = store.create_case(payload)
-    runner = WorkflowRunner(store, engine)
-    await runner.run_all(case.id, bbl=case.bbl, bin_=case.bin, work_type=case.work_type)
-    store.create_task(
-        case.id,
-        title=f"Review distribution — BIN {case.bin or case.bbl}",
-        task_type="distribution_review",
-        assignee=current_user.username,
-    )
-    store.append_audit(
-        case.id,
-        actor=clerk_actor(current_user),
-        action="case_created",
-        detail=f"Intake for {case.address}",
-    )
-    return case
-
-
-@router.get("/{case_id}/distribution")
-def get_distribution(case_id: str, request: Request):
-    store = store_from_request(request)
-    if not store.get_case(case_id):
-        raise HTTPException(status_code=404, detail="Case not found")
-    return store.list_distribution(case_id)
-
-
 @router.post("/{case_id}/distribution/refresh")
 async def refresh_distribution(
     case_id: str,
     request: Request,
     current_user: Annotated[ClerkUser, Depends(get_current_user)],
 ):
-    store: FirestoreStore = store_from_request(request)
-    engine: DistributionEngine = engine_from_request(request)
+    store = store_from_request(request)
     case = store.get_case(case_id)
     if not case:
         raise HTTPException(status_code=404, detail="Case not found")
-    runner = WorkflowRunner(store, engine)
-    completed = await runner.run_all(
-        case.id,
-        bbl=case.bbl,
-        bin_=case.bin,
-        work_type=case.work_type,
-        force=True,
+    return _queue_distribution(
+        store=store,
+        case_id=case_id,
+        actor=clerk_actor(current_user),
+        reason="refresh",
+        action="distribution_enqueued",
     )
-    if completed:
-        store.append_audit(
-            case_id,
-            actor=clerk_actor(current_user),
-            action="distribution_refreshed",
-            detail=f"Live NYC Open Data pull — {len(completed)} department(s) refreshed",
-        )
-    return store.list_distribution(case_id)
 
 
 @router.post("/{case_id}/distribution/refresh-bin-departments")
@@ -251,57 +227,19 @@ async def refresh_bin_departments(
     request: Request,
     current_user: Annotated[ClerkUser, Depends(get_current_user)],
 ):
-    """Re-run BIN-dependent department reviews after a BIN is added or corrected."""
-    store: FirestoreStore = store_from_request(request)
-    engine: DistributionEngine = engine_from_request(request)
+    store = store_from_request(request)
     case = store.get_case(case_id)
     if not case:
         raise HTTPException(status_code=404, detail="Case not found")
     if not case.bin:
         raise HTTPException(status_code=400, detail="BIN is required before refreshing BIN-dependent reviews")
-    runner = WorkflowRunner(store, engine)
-    departments = [Department.FIRE, Department.HOUSING, Department.BUILDING]
-    await runner.refresh_departments(
-        case.id,
-        departments,
-        bbl=case.bbl,
-        bin_=case.bin,
-        work_type=case.work_type,
-    )
-    store.append_audit(
-        case_id,
+    return _queue_distribution(
+        store=store,
+        case_id=case_id,
         actor=clerk_actor(current_user),
-        action="bin_departments_refreshed",
-        detail=f"Re-ran fire, housing, and building reviews for BIN {case.bin}",
+        reason="bin_refresh",
+        action="bin_departments_enqueued",
     )
-    return store.list_distribution(case_id)
-
-
-@router.get("/{case_id}/tasks")
-def get_case_tasks(case_id: str, request: Request):
-    store = store_from_request(request)
-    if not store.get_case(case_id):
-        raise HTTPException(status_code=404, detail="Case not found")
-    return store.list_tasks(case_id, status=None)
-
-
-@router.get("/{case_id}/documents")
-def get_documents(case_id: str, request: Request) -> IntakeDocument:
-    store = store_from_request(request)
-    if not store.get_case(case_id):
-        raise HTTPException(status_code=404, detail="Case not found")
-    document = store.get_intake_document(case_id)
-    if not document:
-        raise HTTPException(status_code=404, detail="No intake document on file for this case")
-    return document
-
-
-@router.get("/{case_id}/claims")
-def get_claims(case_id: str, request: Request) -> list[Claim]:
-    store = store_from_request(request)
-    if not store.get_case(case_id):
-        raise HTTPException(status_code=404, detail="Case not found")
-    return store.list_claims(case_id)
 
 
 @router.post("/{case_id}/claims")
@@ -378,15 +316,23 @@ def respond_to_claim(
         action="claim_responded",
         detail=body.message.strip(),
     )
+    try:
+        task_name = enqueue_distribution(case_id=case_id, reason="claim_response")
+        store.append_audit(
+            case_id,
+            actor="system",
+            action="fleet_enqueued",
+            detail=task_name,
+        )
+    except Exception as exc:
+        store.append_audit(
+            case_id,
+            actor="system",
+            action="fleet_enqueue_failed",
+            detail=str(exc),
+        )
+        raise HTTPException(status_code=503, detail="Cloud Tasks enqueue failed") from exc
     return claim
-
-
-@router.get("/{case_id}/audit")
-def get_audit(case_id: str, request: Request):
-    store = store_from_request(request)
-    if not store.get_case(case_id):
-        raise HTTPException(status_code=404, detail="Case not found")
-    return store.list_audit(case_id)
 
 
 @router.post("/{case_id}/decision")
@@ -404,10 +350,10 @@ def post_decision(
         raise HTTPException(status_code=409, detail="This case already has a final clerk decision")
     if not body.note.strip():
         raise HTTPException(status_code=400, detail="Clerk note is required for audit")
-    if body.override and len(body.note.strip()) < 20:
+    if body.override and len(body.note.strip()) < get_settings().override_note_min_chars:
         raise HTTPException(
             status_code=400,
-            detail="Override decisions require a clerk note of at least 20 characters",
+            detail=f"Override decisions require a clerk note of at least {get_settings().override_note_min_chars} characters",
         )
     if body.decision == "approve":
         reviews = store.list_distribution(case_id)

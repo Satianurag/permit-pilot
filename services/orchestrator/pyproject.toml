@@ -4,7 +4,10 @@ version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
   "google-adk>=1.25.0",
-  "permit-pilot-core",
+  "google-auth>=2.14.1",
+  "google-cloud-aiplatform[adk,agent_engines]>=1.111.0",
+  "mcp>=1.9,<2",
+  "pydantic-settings>=2.8.0",
 ]
 
 [build-system]
@@ -12,10 +15,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["permit_pilot"]
+packages = ["src/permit_pilot"]
 
-[tool.uv.sources]
-permit-pilot-core = { path = "../../packages/permit_pilot_core", editable = true }
-
-[tool.hatch.metadata]
-allow-direct-references = true
+[tool.hatch.build.targets.wheel.sources]
+"src" = ""

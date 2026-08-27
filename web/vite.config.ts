@@ -18,6 +18,10 @@ export default defineConfig({
             path === "/activity" ||
             path === "/tasks" ||
             path === "/permits" ||
+            path === "/agents" ||
+            path === "/governance" ||
+            path === "/memory" ||
+            path === "/traces" ||
             path.startsWith("/cases/")
           ) {
             req.url = "/app.html";

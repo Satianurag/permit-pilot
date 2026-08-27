@@ -19,6 +19,7 @@ from permit_pilot_core.models import (
     DashboardDepartmentRollup,
     DashboardSummary,
     DepartmentReview,
+    DepartmentStep,
     IntakeDocument,
     ReviewStatus,
     Task,
@@ -402,9 +403,6 @@ class FirestoreStore:
             {"status": status.value, "updated_at": _serialize_dt(_now())}
         )
 
-    def count_cases(self) -> int:
-        return sum(1 for _ in self._cases().stream())
-
     def _clerks(self):
         return self._db.collection("clerks")
 
@@ -427,13 +425,6 @@ class FirestoreStore:
                 "updated_at": _serialize_dt(_now()),
             }
         )
-
-    def get_clerk(self, username: str) -> dict[str, Any] | None:
-        snap = self._clerks().document(username).get()
-        if not snap.exists:
-            return None
-        data = snap.to_dict() or {}
-        return {"username": username, **data}
 
     def get_intake_document(self, case_id: str) -> IntakeDocument | None:
         snap = self._cases().document(case_id).collection("intake").document("packet").get()
@@ -510,7 +501,10 @@ class FirestoreStore:
             return None
         return snap.to_dict() or None
 
-    def get_context_cache(self, case_id: str, *, ttl_seconds: int = 3600) -> dict[str, Any] | None:
+    def get_context_cache(self, case_id: str, *, ttl_seconds: int | None = None) -> dict[str, Any] | None:
+        from permit_pilot_core.settings import get_settings
+
+        ttl_seconds = ttl_seconds if ttl_seconds is not None else get_settings().context_cache_ttl_seconds
         snap = self._cases().document(case_id).collection("meta").document("context_cache").get()
         if not snap.exists:
             return None
@@ -550,13 +544,13 @@ class FirestoreStore:
             batch.set(col.document(str(name)), data)
         batch.commit()
 
-    def list_workflow_steps(self, case_id: str) -> list[Any]:
-        from permit_pilot_core.workflow.runner import WorkflowStep, WORKFLOW_DEPARTMENTS
+    def list_workflow_steps(self, case_id: str) -> list[DepartmentStep]:
+        from permit_pilot_core.models import Department
 
-        steps: list[WorkflowStep] = []
+        steps: list[DepartmentStep] = []
         for snap in self._cases().document(case_id).collection("workflow").stream():
-            steps.append(WorkflowStep.model_validate(snap.to_dict()))
-        order = {dept.value: i for i, dept in enumerate(WORKFLOW_DEPARTMENTS)}
+            steps.append(DepartmentStep.model_validate(snap.to_dict()))
+        order = {dept.value: i for i, dept in enumerate(Department)}
         steps.sort(key=lambda s: order.get(s.department.value if s.department else s.name, 99))
         return steps
 
@@ -576,10 +570,14 @@ class FirestoreStore:
         spans.sort(key=lambda s: s.started_at)
         return spans
 
-    def dashboard_summary(self, *, username: str, review_window_days: int = 5) -> DashboardSummary:
+    def dashboard_summary(self, *, username: str, review_window_days: int | None = None) -> DashboardSummary:
+        from permit_pilot_core.settings import get_settings
+
+        settings = get_settings()
+        window = review_window_days if review_window_days is not None else settings.review_window_days
         now = _now()
-        review_cutoff = now - timedelta(days=review_window_days)
-        distribution_stale_cutoff = now - timedelta(hours=24)
+        review_cutoff = now - timedelta(days=window)
+        distribution_stale_cutoff = now - timedelta(hours=settings.distribution_stale_hours)
         terminal = {CaseStatus.APPROVED, CaseStatus.CHANGES_REQUESTED}
 
         open_tasks = self.list_tasks(status="open", limit=500)
@@ -675,12 +673,12 @@ class FirestoreStore:
                     )
 
             for step in self.list_workflow_steps(case.id):
-                if step.status == "interrupted":
+                if step.status == "running":
                     interrupted_workflows += 1
                     push_alert(
                         "workflow_interrupted",
-                        f"Workflow interrupted — {case.address}",
-                        step.detail or "Distribution workflow can be resumed.",
+                        f"Fleet run in progress — {case.address}",
+                        step.detail or "Department agent is still running.",
                         case.id,
                         "distribution",
                     )

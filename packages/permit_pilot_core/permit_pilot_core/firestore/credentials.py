@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import os
 import subprocess
 
 from google.auth.exceptions import DefaultCredentialsError
 from google.cloud import firestore
 from google.oauth2.credentials import Credentials
+
+from permit_pilot_core.settings import get_settings
 
 
 def _gcloud_access_token() -> str:
@@ -17,11 +18,13 @@ def _gcloud_access_token() -> str:
 
 
 def _running_on_cloud_run() -> bool:
-    return bool(os.environ.get("K_SERVICE"))
+    return get_settings().running_on_cloud_run
 
 
 def firestore_client(project_id: str | None = None) -> firestore.Client:
-    project = project_id or os.environ.get("GOOGLE_CLOUD_PROJECT", "gen-lang-client-0233250350")
+    project = project_id or get_settings().project_id
+    if not project:
+        raise RuntimeError("GOOGLE_CLOUD_PROJECT is required")
     try:
         return firestore.Client(project=project)
     except DefaultCredentialsError:

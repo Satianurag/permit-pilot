@@ -1,51 +1,63 @@
-import os
+from permit_pilot_core.settings import get_settings
 
 
 def gcp_project_id() -> str:
-    return os.environ.get("GOOGLE_CLOUD_PROJECT", "gen-lang-client-0233250350")
+    return get_settings().project_id
 
 
 def cloud_service_url() -> str:
-    return os.environ.get(
-        "PERMIT_PILOT_URL",
-        "https://permit-pilot-538666547847.us-central1.run.app",
-    ).rstrip("/")
+    return get_settings().permit_pilot_url.rstrip("/")
 
 
 def seed_on_startup() -> bool:
-    return os.environ.get("SEED_ON_STARTUP", "false").lower() in {"1", "true", "yes"}
+    return get_settings().seed_on_startup
 
 
 def cors_origins() -> list[str]:
-    raw = os.environ.get("CORS_ORIGINS", cloud_service_url())
-    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+    origins = get_settings().cors_origin_list
+    if origins:
+        return origins
+    url = cloud_service_url()
+    return [url] if url else []
 
 
 def observability_links(*, case_id: str | None, project_id: str) -> dict[str, str | None]:
-    location = os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1")
-    langfuse_host = os.environ.get("LANGFUSE_HOST")
-    langfuse_project = os.environ.get("LANGFUSE_PROJECT_ID")
-    cloud_trace = (
-        f"https://console.cloud.google.com/traces/list?project={project_id}"
+    settings = get_settings()
+    location = settings.region
+    cloud_trace = f"https://console.cloud.google.com/traces/list?project={project_id}" if project_id else None
+    topology = (
+        f"https://console.cloud.google.com/gen-app-builder/engines?project={project_id}"
         if project_id
         else None
     )
-    langfuse_url = None
-    if langfuse_host and case_id:
-        base = langfuse_host.rstrip("/")
-        if langfuse_project:
-            langfuse_url = f"{base}/project/{langfuse_project}/traces?search={case_id}"
-        else:
-            langfuse_url = f"{base}/traces?search={case_id}"
-    workflows_url = None
-    workflow_name = os.environ.get("GCP_WORKFLOW_NAME")
-    if workflow_name and project_id:
-        workflows_url = (
-            f"https://console.cloud.google.com/workflows/workflow/"
-            f"{location}/{workflow_name}/executions?project={project_id}"
+    gateway = None
+    if settings.agent_gateway_name and project_id:
+        gateway = (
+            f"https://console.cloud.google.com/net-services/agent-gateway/details/"
+            f"{location}/{settings.agent_gateway_name}?project={project_id}"
         )
+    registry = (
+        f"https://console.cloud.google.com/vertex-ai/agents/registry?project={project_id}"
+        if project_id
+        else None
+    )
+    armor = (
+        f"https://console.cloud.google.com/security/model-armor/locations/{settings.model_armor_location}"
+        f"/templates/{settings.model_armor_template}?project={project_id}"
+        if project_id
+        else None
+    )
+    observability = (
+        f"https://console.cloud.google.com/vertex-ai/agents?project={project_id}" if project_id else None
+    )
     return {
         "cloud_trace_url": cloud_trace,
-        "langfuse_url": langfuse_url,
-        "gcp_workflows_url": workflows_url,
+        "topology_url": topology,
+        "agent_gateway_url": gateway,
+        "agent_registry_url": registry,
+        "model_armor_url": armor,
+        "agent_observability_url": observability,
+        "langfuse_url": None,
+        "gcp_workflows_url": None,
+        "case_id": case_id,
     }

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import AlertList from "../components/AlertList";
 import CaseStatusChart from "../components/CaseStatusChart";
@@ -9,9 +9,10 @@ import Panel from "../components/Panel";
 import QuickActions from "../components/QuickActions";
 import Skeleton from "../components/Skeleton";
 import StatCard from "../components/StatCard";
-import { api, DashboardSummary } from "../lib/api";
+import { api } from "../lib/api";
 import { errorMessage } from "../lib/errors";
 import { getStoredUser } from "../lib/auth";
+import { useState } from "react";
 
 function greeting(name: string) {
   const hour = new Date().getHours();
@@ -22,26 +23,13 @@ function greeting(name: string) {
 
 export default function DashboardPage() {
   const user = getStoredUser();
-  const [summary, setSummary] = useState<DashboardSummary | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
   const [intakeOpen, setIntakeOpen] = useState(false);
+  const { data: summary, error, isLoading, isFetching, refetch } = useQuery({
+    queryKey: ["dashboard"],
+    queryFn: api.dashboardSummary,
+  });
 
-  const load = () => {
-    setLoading(true);
-    api
-      .dashboardSummary()
-      .then((nextSummary) => {
-        setSummary(nextSummary);
-        setError(null);
-      })
-      .catch((err: Error) => setError(err.message))
-      .finally(() => setLoading(false));
-  };
-
-  useEffect(load, []);
-
-  if (loading && !summary) {
+  if (isLoading && !summary) {
     return (
       <div className="space-y-6">
         <Skeleton rows={2} label="Loading dashboard" />
@@ -67,7 +55,7 @@ export default function DashboardPage() {
         subtitle="At-a-glance metrics and alerts. Open My Tasks for the full queue, Activity for the audit feed, and Permit search for dossier lookup."
         action={
           <div className="flex flex-wrap gap-2">
-            <button type="button" className="pp-btn-secondary" onClick={load} disabled={loading}>
+            <button type="button" className="pp-btn-secondary" onClick={() => void refetch()} disabled={isFetching}>
               Refresh
             </button>
             <button type="button" className="pp-btn-primary" onClick={() => setIntakeOpen(true)}>
@@ -144,11 +132,7 @@ export default function DashboardPage() {
               </Link>
             </Panel>
 
-            <Panel
-              title="Department rollup"
-              subtitle="Pass / fail / checking across open cases."
-              className="xl:col-span-2"
-            >
+            <Panel title="Department rollup" subtitle="Pass / fail / checking across open cases." className="xl:col-span-2">
               <DepartmentRollup rollup={summary.department_rollup} />
             </Panel>
           </div>
@@ -184,7 +168,7 @@ export default function DashboardPage() {
         </>
       )}
 
-      <IntakeModal open={intakeOpen} onClose={() => setIntakeOpen(false)} onCreated={load} />
+      <IntakeModal open={intakeOpen} onClose={() => setIntakeOpen(false)} />
     </div>
   );
 }

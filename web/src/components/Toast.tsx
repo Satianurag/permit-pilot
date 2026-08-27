@@ -51,7 +51,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
         {toasts.map((toast) => (
           <p
             key={toast.id}
-            role="status"
+            role={toast.tone === "error" ? "alert" : "status"}
             className={`rounded-md border px-3 py-2 text-sm shadow-sm pointer-events-auto ${toneClass[toast.tone]}`}
           >
             <span>{toast.text}</span>

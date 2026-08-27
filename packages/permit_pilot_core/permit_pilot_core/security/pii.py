@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import os
 import re
+
+from permit_pilot_core.settings import get_settings
 
 _PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\b\d{3}-\d{2}-\d{4}\b"), "[REDACTED-SSN]"),
@@ -70,8 +71,9 @@ def redact_pii(text: str) -> tuple[str, list[str]]:
     redacted, regex_findings = _redact_regex(text)
     findings = list(regex_findings)
 
-    project = os.environ.get("GOOGLE_CLOUD_PROJECT")
-    if project and os.environ.get("K_SERVICE"):
+    settings = get_settings()
+    project = settings.project_id
+    if project and settings.running_on_cloud_run:
         try:
             dlp_redacted, dlp_findings = _redact_dlp(redacted, project)
             redacted = dlp_redacted

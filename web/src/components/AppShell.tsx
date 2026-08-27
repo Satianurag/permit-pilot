@@ -1,12 +1,17 @@
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { Activity, ClipboardList, Home, MemoryStick, Search, Shield, ShipWheel, Waypoints } from "lucide-react";
 import { clearSession, getStoredUser } from "../lib/auth";
+import { cn } from "../lib/cn";
 
 const NAV = [
-  { to: "/dashboard", label: "Home", short: "Home" },
-  { to: "/tasks", label: "My Tasks", short: "Tasks" },
-  { to: "/activity", label: "Activity", short: "Activity" },
-  { to: "/permits", label: "Permit search", short: "Search" },
-  { to: "/agents", label: "Agent registry", short: "Agents" },
+  { to: "/dashboard", label: "Home", short: "Home", icon: Home },
+  { to: "/tasks", label: "My Tasks", short: "Tasks", icon: ClipboardList },
+  { to: "/activity", label: "Activity", short: "Activity", icon: Activity },
+  { to: "/permits", label: "Permit search", short: "Search", icon: Search },
+  { to: "/agents", label: "Fleet", short: "Fleet", icon: ShipWheel },
+  { to: "/governance", label: "Governance", short: "Govern", icon: Shield },
+  { to: "/memory", label: "Parcel memory", short: "Memory", icon: MemoryStick },
+  { to: "/traces", label: "Traces", short: "Traces", icon: Waypoints },
 ] as const;
 
 const TOPBAR_COPY: Record<string, { kicker: string; title: string }> = {
@@ -14,7 +19,10 @@ const TOPBAR_COPY: Record<string, { kicker: string; title: string }> = {
   "/tasks": { kicker: "Clerk workspace", title: "My tasks · review queue" },
   "/activity": { kicker: "Clerk workspace", title: "Activity · audit feed" },
   "/permits": { kicker: "Clerk workspace", title: "Permit search · dossier lookup" },
-  "/agents": { kicker: "Clerk workspace", title: "Agent registry · signed allowlist" },
+  "/agents": { kicker: "Agent Platform", title: "Fleet · Agent Registry and SPIFFE identities" },
+  "/governance": { kicker: "Agent Platform", title: "Governance · gateway, IAP, Model Armor" },
+  "/memory": { kicker: "Agent Platform", title: "Parcel memory · Memory Bank by BBL" },
+  "/traces": { kicker: "Agent Platform", title: "Traces · Cloud Trace and App Topology" },
 };
 
 function topbarCopy(pathname: string) {
@@ -60,7 +68,9 @@ export default function AppShell() {
               aria-current={isActive(item.to) ? "page" : undefined}
               className="pp-sidebar-link"
             >
-              <NavIcon path={item.to} />
+              <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-white/10">
+                <item.icon className="h-4 w-4" aria-hidden="true" />
+              </span>
               {item.label}
             </Link>
           ))}
@@ -84,7 +94,12 @@ export default function AppShell() {
             <p className="pp-display text-lg font-semibold text-pp-navy">Permit Pilot</p>
             <nav className="pp-mobile-nav mt-2" aria-label="Primary">
               {NAV.map((item) => (
-                <Link key={item.to} to={item.to} aria-current={isActive(item.to) ? "page" : undefined}>
+                <Link
+                  key={item.to}
+                  to={item.to}
+                  aria-current={isActive(item.to) ? "page" : undefined}
+                  className={cn(isActive(item.to) && "font-semibold")}
+                >
                   {item.short}
                 </Link>
               ))}
@@ -108,13 +123,4 @@ export default function AppShell() {
       </div>
     </div>
   );
-}
-
-function NavIcon({ path }: { path: string }) {
-  const common = "inline-flex h-8 w-8 items-center justify-center rounded-lg bg-white/10 text-xs font-bold";
-  if (path === "/dashboard") return <span className={common}>⌂</span>;
-  if (path === "/tasks") return <span className={common}>☰</span>;
-  if (path === "/activity") return <span className={common}>↺</span>;
-  if (path === "/agents") return <span className={common}>AI</span>;
-  return <span className={common}>⌕</span>;
 }

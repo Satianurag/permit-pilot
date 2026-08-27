@@ -1,18 +1,17 @@
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from permit_pilot_core.distribution.engine import DistributionEngine
-from permit_pilot_core.firestore.store import FirestoreStore
+from permit_pilot_core.fleet_runner import init_department_steps
 from permit_pilot_core.models import CreateCaseRequest, IntakeRequest
+from permit_pilot_core.parcel import resolve_parcel
+from permit_pilot_core.platform.armor import sanitize_user_prompt
+from permit_pilot_core.platform.tasks import enqueue_distribution
 from permit_pilot_core.security.pii import redact_pii
 from permit_pilot_core.socrata.client import SocrataClient
-from permit_pilot_core.workflow.runner import WorkflowRunner
 from permit_pilot_api.auth import ClerkUser, clerk_actor, get_current_user
-from permit_pilot_api.config import gcp_project_id
-from permit_pilot_api.deps import engine_from_request, store_from_request
-from permit_pilot_api.workflow_jobs import run_distribution_background
+from permit_pilot_api.deps import store_from_request
 
 router = APIRouter(prefix="/cases", tags=["intake"], dependencies=[Depends(get_current_user)])
 
@@ -24,38 +23,25 @@ class PacketPreviewRequest(BaseModel):
 @router.post("/intake/preview-redaction")
 def preview_packet_redaction(body: PacketPreviewRequest):
     redacted, findings = redact_pii(body.packet_text)
-    return {"redacted_text": redacted, "findings": findings}
-
-
-async def _resolve_bin(payload: CreateCaseRequest, socrata: SocrataClient) -> CreateCaseRequest:
-    if payload.bin:
-        return payload
-    rows = await socrata.pluto_by_bbl(payload.bbl)
-    if not rows:
-        return payload
-    row = rows[0]
-    footprints = await socrata.building_footprints_by_bbl(payload.bbl, limit=1)
-    bin_from_footprint = str(footprints[0].get("bin") or "") if footprints else ""
-    return payload.model_copy(
-        update={
-            "bin": bin_from_footprint or str(row.get("bin") or ""),
-            "address": payload.address or str(row.get("address") or ""),
-            "borough": payload.borough or str(row.get("borough") or ""),
-            "owner": payload.owner or str(row.get("ownername") or ""),
-        }
-    )
+    armor = sanitize_user_prompt(body.packet_text)
+    if armor.blocked:
+        findings = list(findings) + ["Model Armor blocked prompt-injection content"]
+    return {"redacted_text": redacted, "findings": findings, "armor": armor}
 
 
 @router.post("/intake")
 async def intake_case(
     payload: IntakeRequest,
     request: Request,
-    background_tasks: BackgroundTasks,
     current_user: Annotated[ClerkUser, Depends(get_current_user)],
 ):
-    store: FirestoreStore = store_from_request(request)
-    engine: DistributionEngine = engine_from_request(request)
+    store = store_from_request(request)
     socrata = SocrataClient()
+
+    if payload.work_type:
+        armor = sanitize_user_prompt(payload.work_type)
+        if armor.blocked:
+            raise HTTPException(status_code=400, detail="Model Armor blocked the work-type field")
 
     redacted_packet = ""
     pii_findings: list[str] = []
@@ -70,7 +56,7 @@ async def intake_case(
         owner=payload.owner,
         borough=payload.borough,
     )
-    resolved = await _resolve_bin(create_payload, socrata)
+    resolved = await resolve_parcel(create_payload, socrata)
     case = store.create_case(resolved)
 
     if redacted_packet:
@@ -102,16 +88,19 @@ async def intake_case(
             detail=f"Plan PDF stored: {payload.plan_filename}",
         )
 
-    runner = WorkflowRunner(store, engine)
-    runner.init_steps(case.id)
-    background_tasks.add_task(
-        run_distribution_background,
-        case_id=case.id,
-        bbl=case.bbl,
-        bin_=case.bin,
-        work_type=case.work_type,
-        project_id=gcp_project_id(),
-    )
+    store.save_workflow_steps(case.id, init_department_steps())
+    try:
+        task_name = enqueue_distribution(case_id=case.id, reason="intake")
+        store.append_audit(case.id, actor="system", action="fleet_enqueued", detail=task_name)
+    except Exception as exc:
+        store.append_audit(
+            case.id,
+            actor="system",
+            action="fleet_enqueue_failed",
+            detail=str(exc),
+        )
+        raise HTTPException(status_code=503, detail="Cloud Tasks enqueue failed") from exc
+
     store.create_task(
         case.id,
         title=f"Review distribution — BIN {case.bin or case.bbl}",

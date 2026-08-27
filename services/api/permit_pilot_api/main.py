@@ -14,7 +14,20 @@ from permit_pilot_core.observability.telemetry import setup_telemetry
 from permit_pilot_core.seeds import ensure_seeded
 from permit_pilot_api.clerk_accounts import ensure_cloud_clerks
 from permit_pilot_api.config import cors_origins, gcp_project_id, seed_on_startup
-from permit_pilot_api.routes import activity, agents, auth_routes, cases, config, dashboard, intake, nyc, orchestrate, tasks, workflow
+from permit_pilot_api.routes import (
+    activity,
+    agents,
+    auth_routes,
+    cases,
+    config,
+    dashboard,
+    fleet,
+    intake,
+    internal,
+    nyc,
+    orchestrate,
+    tasks,
+)
 
 
 @asynccontextmanager
@@ -33,7 +46,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Permit Pilot API", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=cors_origins(),
+    allow_origins=cors_origins() or ["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -51,12 +64,13 @@ app.include_router(tasks.router, prefix="/api")
 app.include_router(cases.router, prefix="/api")
 app.include_router(intake.router, prefix="/api")
 app.include_router(nyc.router, prefix="/api")
-app.include_router(workflow.router, prefix="/api")
+app.include_router(fleet.router, prefix="/api")
 app.include_router(orchestrate.router, prefix="/api")
 app.include_router(config.router, prefix="/api")
 app.include_router(dashboard.router, prefix="/api")
 app.include_router(activity.router, prefix="/api")
 app.include_router(agents.router, prefix="/api")
+app.include_router(internal.router, prefix="/api")
 
 
 @app.get("/api/health")
@@ -72,10 +86,22 @@ if _static_root and Path(_static_root).is_dir():
 
     _SPA_ENTRY = Path(_static_root) / "app.html"
     _LANDING_ENTRY = Path(_static_root) / "index.html"
-    _SPA_PREFIXES = ("login", "dashboard", "activity", "tasks", "permits", "agents", "cases")
+    _SPA_PREFIXES = (
+        "login",
+        "dashboard",
+        "activity",
+        "tasks",
+        "permits",
+        "agents",
+        "governance",
+        "memory",
+        "traces",
+        "cases",
+    )
 
     def _spa_entry_for(spa_path: str) -> Path:
-        if spa_path in _SPA_PREFIXES or spa_path.startswith("cases/"):
+        first = spa_path.split("/", 1)[0]
+        if first in _SPA_PREFIXES or spa_path.startswith("cases/"):
             return _SPA_ENTRY if _SPA_ENTRY.is_file() else _LANDING_ENTRY
         return _LANDING_ENTRY
 

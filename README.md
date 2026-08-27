@@ -1,61 +1,77 @@
 # Permit Pilot
 
-**NYC building-permit clerk orchestration layer** — task inbox + case file where department agents pull **live NYC Open Data** (Socrata), write distribution reviews, and a human clerk approves. This does **not** replace [DOB NOW](https://www.nyc.gov/site/buildings/industry/dob-now.page); it sits above the examiner workflow.
+**NYC building-permit clerk orchestration** on the Gemini Enterprise Agent Platform. Department agents review live NYC Open Data through a governed MCP server; a human clerk decides.
 
 Built for the [All Things Agentic Hackathon](https://allthingsagentichackathon.devpost.com/) — **Fortified Enterprise Fleet** track.
 
 | Live service | URL |
 |--------------|-----|
-| Clerk app (UI + `/api`) | https://permit-pilot-538666547847.us-central1.run.app |
-| ADK orchestrator | https://permit-pilot-orchestrator-538666547847.us-central1.run.app |
+| Clerk app (UI + `/api`) | https://permit-pilot-pbrfw2zkaq-uc.a.run.app |
+| Permit Tools MCP | https://permit-pilot-mcp-pbrfw2zkaq-uc.a.run.app/mcp (authenticated) |
 
-**GCP project:** `gen-lang-client-0233250350` · **Region:** `us-central1`
+**GCP project:** `gen-lang-client-0233250350` · **Region:** `us-central1` · **Model:** `gemini-3.5-flash` at `VERTEX_LOCATION=global`
+
+---
+
+## Architecture
+
+```mermaid
+flowchart TB
+  UI["Clerk UI: React 19, Tailwind 4, Radix, TanStack Query"]
+  CP["Control plane: FastAPI on Cloud Run"]
+  FS["Firestore"]
+  CT["Cloud Tasks"]
+  MA1["Model Armor inline"]
+  AR["Agent Runtime: 8 ADK agents with Agent Identity"]
+  MB["Memory Bank scoped by BBL"]
+  AGW["Agent Gateway AGENT_TO_ANYWHERE"]
+  IAP["IAP per-tool egress"]
+  REG["Agent Registry"]
+  MCP["Permit Tools MCP / NYC Open Data"]
+
+  UI --> CP
+  CP --> FS
+  CP --> CT
+  CP --> MA1
+  CT --> AR
+  AR --> MB
+  AR -->|"all egress"| AGW
+  AGW --> IAP
+  AGW --> REG
+  REG --> MCP
+```
+
+The control plane does not run department agents inline. Intake, refresh, claim resume, and “Run fleet” enqueue Cloud Tasks. Eventarc wakes a case when an applicant claim is updated weeks later.
 
 ---
 
 ## What it does
 
-Maria (NYC plan examiner) uses a production-style clerk UI:
+Maria (NYC plan examiner) uses the clerk UI:
 
-1. **My Tasks** (`/tasks`) — daily inbox
-2. **Case file** (`/cases/:id`) — Summary, Distribution, Claims, Audit tabs
-3. **Department agents** — Zoning, Building/DOB, Fire, Utilities, Landmarks, plus a **Critic** (cite-or-reject)
-4. **Clerk decides** — Approve dossier or request changes (sticky bar)
+1. **My Tasks** — daily inbox with a 5-day review clock
+2. **Case file** — Summary, Distribution, Documents, Claims, Audit
+3. **Department fleet** — Zoning, Building, Fire, Utilities, Landmarks, Housing, Critic, Orchestrator
+4. **Governance** — Agent Gateway, Model Armor inspect, SPIFFE identities
+5. **Parcel memory** — Memory Bank facts keyed to a BBL
+6. **Clerk decides** — Approve or request changes with a required audit note
 
-All distribution data comes from **real Socrata queries** keyed by BBL/BIN. Reference cases use verified NYC addresses (see `packages/permit_pilot_core/permit_pilot_core/seeds.py`). **No mock data in application code.**
+Reference BBLs live in `packages/permit_pilot_core/permit_pilot_core/seeds.py` (761 Macon Street is `3014930048`, PLUTO zone **R5B**, dataset `64uk-42ks`).
 
 ---
 
-## Architecture (as deployed)
-
-```
-Clerk UI (React/Vite)
-  └─ FastAPI on Cloud Run (single container: static + /api)
-       ├─ Firestore — cases, tasks, distribution, claims, audit, workflow steps, traces
-       ├─ DistributionEngine — live NYC Open Data (Socrata)
-       ├─ WorkflowRunner — Firestore checkpoints (crash / resume demo)
-       ├─ GCP Cloud Workflows — managed durable distribution orchestration
-       ├─ Vertex Gemini (google-genai) — case briefing via POST /api/cases/{id}/orchestrate
-       ├─ Cloud DLP — PII redaction on intake (prod); regex fallback locally
-       ├─ OpenTelemetry → Cloud Trace + Firestore trace mirror (Audit tab)
-       └─ Agent gateway — fingerprint allowlist for signed A2A agents
-
-ADK orchestrator (separate Cloud Run) — zoning, building, distribution, critic agents
-```
+## Platform facts
 
 | Capability | Implementation |
 |------------|----------------|
-| Persistence | GCP Firestore |
-| NYC data | NYC Open Data (Socrata) |
-| PII | Cloud DLP (prod) / regex (local) |
-| LLM briefing | Vertex Gemini `gemini-2.5-flash` via `google-genai` |
-| Agent runtime | Google ADK on Cloud Run |
-| Traces | Cloud Trace + Firestore UI mirror |
-| Durable workflow | GCP Cloud Workflows + Firestore checkpoints |
-| Gateway | Fingerprint allowlist (`AGENT_TRUSTED_FINGERPRINTS`) |
-| Deploy | Cloud Run + Artifact Registry (`Dockerfile.combined`) |
-
-**Honest scope notes** (planned in research docs, not fully built): full Temporal cluster, Letta memory partitions, SPIFFE/Keycloak, NeMo guardrails, and production agentgateway CEL policies. The demo uses Firestore checkpoints + Cloud Workflows and a fingerprint gateway pattern instead.
+| Identity | Agent Runtime `identity_type=AGENT_IDENTITY` — SPIFFE trust domain `agents.global.proj-{NUM}.system.id.goog` |
+| Egress | Agent Gateway `permit-pilot-egress` in `AGENT_TO_ANYWHERE` mode |
+| Least privilege | IAP `roles/iap.egressor` per agent; zoning cannot call HPD |
+| Guardrails | Model Armor template `permit-pilot-armor` (inline + gateway extension) |
+| Tools | Permit Tools MCP on Cloud Run, registered in Agent Registry |
+| Async | Cloud Tasks queue `permit-pilot-distribution` + Eventarc on Firestore claims |
+| Memory | Memory Bank scoped `{"bbl": "..."}` |
+| Observability | OpenTelemetry → Cloud Trace; Fleet / Governance / Traces consoles |
 
 ---
 
@@ -63,19 +79,18 @@ ADK orchestrator (separate Cloud Run) — zoning, building, distribution, critic
 
 ```
 permit-pilot/
-  packages/permit_pilot_core/   # models, Socrata, Firestore, distribution, workflow, traces
-  services/api/                 # FastAPI (/api prefix)
-  services/orchestrator/        # ADK agents
+  packages/permit_pilot_core/   # models, Socrata, Firestore, MCP-backed distribution, settings
+  services/api/                 # FastAPI control plane
+  services/mcp-tools/           # Governed NYC Open Data MCP server
+  services/orchestrator/        # 8 ADK agents
   web/                          # React 19 + Vite + Tailwind 4
-  infra/workflows/              # GCP Cloud Workflows definition
   scripts/
-    deploy.sh                   # Main app (combined UI + API)
-    deploy-orchestrator.sh      # ADK service
-    deploy-workflow.sh          # Cloud Workflows + IAM
-    audit.sh                    # Production smoke tests (9 checks)
-    seed-once.sh                # One-time Firestore bootstrap (local)
-    dev.sh                      # Local API / web
-  PERMIT-PILOT-ONE-PAGE.md      # Living product + demo spec (source of truth)
+    deploy.sh                   # Combined UI + API Cloud Run
+    deploy-fleet.py             # Agent Runtime fleet
+    bind-agent-gateway.py       # Rebind engines to the gateway
+    bind-agent-identity.sh      # IAP least-privilege CEL
+    audit.sh                    # Production proof (gateway, Armor, memory, resume)
+    provision-platform.sh       # Gateway, IAP, Eventarc (do not re-run casually)
 ```
 
 ---
@@ -88,30 +103,29 @@ permit-pilot/
 gcloud config set project gen-lang-client-0233250350
 gcloud auth application-default login
 
-# API (port 8000)
+export GOOGLE_CLOUD_PROJECT=gen-lang-client-0233250350
+export VERTEX_LOCATION=global
+export VERTEX_MODEL=gemini-3.5-flash
+
 ./scripts/dev.sh api
-
-# Web (port 5173, proxies /api → :8000) — separate terminal
 ./scripts/dev.sh web
-
-# Optional: seed real NYC cases into Firestore (run once)
-./scripts/seed-once.sh
 ```
 
-Copy `.env.example` to `.env` for optional Langfuse export. Firestore traces are always persisted.
+`.cloud-deploy.env` is gitignored. Clerk password lives in Secret Manager `permit-pilot-clerk-password`.
 
 ---
 
-## Deploy (production)
+## Deploy
 
 ```bash
-./scripts/deploy.sh              # Clerk app — scale-to-zero, max 1 instance
-./scripts/deploy-orchestrator.sh # ADK orchestrator
-./scripts/deploy-workflow.sh     # Cloud Workflows (then redeploy main if env changed)
-./scripts/audit.sh               # Verify all endpoints
+set -a && source .cloud-deploy.env && set +a
+export VERTEX_LOCATION=global VERTEX_MODEL=gemini-3.5-flash
+./scripts/deploy.sh
+python3 scripts/deploy-fleet.py
+python3 scripts/bind-agent-gateway.py
+PERMIT_PILOT_URL="$(gcloud run services describe permit-pilot --region=us-central1 --format='value(status.url)')" \
+  ./scripts/audit.sh
 ```
-
-**Cost-conscious defaults:** single public Cloud Run service, `min-instances=0`, `max-instances=1`, CPU throttling, no startup boost, `SEED_ON_STARTUP=false` (no Socrata churn on cold start).
 
 ---
 
@@ -121,41 +135,40 @@ All routes are under `/api`:
 
 | Route | Purpose |
 |-------|---------|
-| `GET /tasks` | Clerk task inbox |
-| `GET /cases/{id}` | Case summary |
-| `GET /cases/{id}/distribution` | Department reviews (live Socrata) |
-| `POST /cases/intake` | New case + PII redaction |
-| `POST /cases/{id}/workflow/resume` | Resume distribution workflow |
-| `POST /cases/{id}/workflow/gcp-run` | Start Cloud Workflows execution |
-| `POST /cases/{id}/orchestrate` | Vertex Gemini briefing |
-| `GET /cases/{id}/trace` | Trace spans for Audit tab |
-| `GET /agents` | Agent catalog (A2A cards) |
-| `POST /agents/{name}/invoke` | Gateway-signed agent invoke |
-| `GET /config/observability` | Cloud Trace / Workflows console links |
+| `POST /cases/intake` | New case; enqueue Cloud Tasks fleet |
+| `GET /cases/{id}/bundle` | Case + distribution + claims + audit + traces |
+| `POST /cases/{id}/fleet/run` | Enqueue Agent Runtime distribution |
+| `POST /cases/{id}/distribution/refresh` | Enqueue a live NYC Open Data refresh |
+| `POST /cases/{id}/orchestrate` | Vertex Gemini clerk briefing |
+| `GET /agents` | Fleet cards with SPIFFE IDs |
+| `GET /governance` | Gateway, Armor, registry, console links |
+| `GET /memory/{bbl}` | Memory Bank retrieve by parcel |
+| `POST /armor/inspect` | Model Armor on clerk-supplied text |
+| `POST /api/internal/distribution/run` | Cloud Tasks worker (OIDC) |
+| `POST /api/internal/eventarc/claims` | Eventarc claim resume |
 
 ---
 
-## Demo video (remaining deliverable)
+## Demo beats (repeatable)
 
-Record a **≤4 minute unedited** video per `PERMIT-PILOT-ONE-PAGE.md` §16:
-
-1. GCP proof (Cloud Run + Firestore console)
-2. Agent Catalog — signed pass, rogue blocked
-3. Intake + PII redaction
-4. Distribution workflow — simulate kill → resume (or Run GCP Workflows)
-5. Critic citations in distribution drawer
-6. Vertex orchestrator briefing
-7. Audit trace replay + approve
+1. Sign in as Maria. Open **Fleet** — eight engines with SPIFFE `proj-` principals.
+2. **Governance** — paste a jailbreak; Model Armor returns **Blocked**.
+3. **Parcel memory** — BBL `3014930048` retrieves Memory Bank facts.
+4. Intake or **Run Agent Runtime fleet** on a case — Cloud Tasks 200, distribution fills from NYC Open Data.
+5. Open a department row — evidence cites live dataset IDs (`64uk-42ks`, `skr7-cxt3`, …).
+6. **Traces** / Audit tab — Cloud Trace and Agent Gateway console links.
+7. Optional: revoke zoning’s IAP binding and re-run fleet — `lookup_pluto` is denied at the gateway.
 
 ---
 
-## Documentation
+## Evaluation
 
-| File | Contents |
-|------|----------|
-| [PERMIT-PILOT-ONE-PAGE.md](./PERMIT-PILOT-ONE-PAGE.md) | Product spec, UI, demo script, audit matrix |
-| [PERMIT-PILOT-PLAN.md](./PERMIT-PILOT-PLAN.md) | Full architecture research |
-| [RESEARCH-ADDENDUM.md](./RESEARCH-ADDENDUM.md) | Hackathon rules, build notes |
+```bash
+cd packages/permit_pilot_core
+python -m unittest tests.test_eval_bbls tests.test_parcel tests.test_identity tests.test_fleet_catalog
+```
+
+Golden set: 761 Macon Street (`3014930048`) must resolve PLUTO zone **R5B**. Critic must FAIL an uncited department failure.
 
 ---
 

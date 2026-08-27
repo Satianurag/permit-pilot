@@ -6,10 +6,10 @@ dependencies = [
   "fastapi>=0.128.0",
   "uvicorn[standard]>=0.34.0",
   "permit-pilot-core",
-  "google-genai>=1.33.0",
   "pyjwt>=2.10.0",
   "pwdlib[argon2]>=0.2.1",
   "python-multipart>=0.0.20",
+  "google-auth>=2.14.1",
 ]
 
 [build-system]

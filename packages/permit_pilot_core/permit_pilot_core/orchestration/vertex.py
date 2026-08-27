@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import os
-
 from google import genai
 
 from permit_pilot_core.models import Case, DepartmentReview
@@ -9,9 +7,13 @@ from permit_pilot_core.models import Case, DepartmentReview
 
 def orchestrate_case_summary(case: Case, reviews: list[DepartmentReview]) -> str:
     """Clerk briefing via Vertex Gemini (google-genai SDK, Context7-current)."""
-    project = os.environ.get("GOOGLE_CLOUD_PROJECT")
-    location = os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1")
-    model_id = os.environ.get("VERTEX_MODEL", "gemini-2.5-flash")
+    from permit_pilot_core.platform.armor import sanitize_model_response, sanitize_user_prompt
+    from permit_pilot_core.settings import get_settings
+
+    settings = get_settings()
+    project = settings.project_id
+    location = settings.vertex_location
+    model_id = settings.vertex_model
 
     if not project:
         raise RuntimeError("GOOGLE_CLOUD_PROJECT is required for Vertex orchestration")
@@ -26,5 +28,12 @@ def orchestrate_case_summary(case: Case, reviews: list[DepartmentReview]) -> str
         f"Write a concise 3-sentence clerk briefing: risks, blockers, and recommended next action. "
         f"Only cite facts from the department results above."
     )
+    inbound = sanitize_user_prompt(prompt)
+    if inbound.blocked:
+        raise RuntimeError("Model Armor blocked the clerk briefing prompt")
     response = client.models.generate_content(model=model_id, contents=prompt)
-    return (response.text or "").strip()
+    text = (response.text or "").strip()
+    outbound = sanitize_model_response(text)
+    if outbound.blocked:
+        raise RuntimeError("Model Armor blocked the clerk briefing response")
+    return text

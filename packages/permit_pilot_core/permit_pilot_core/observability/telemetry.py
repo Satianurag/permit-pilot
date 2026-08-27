@@ -1,6 +1,4 @@
-from __future__ import annotations
-
-import os
+from permit_pilot_core.settings import get_settings
 
 _initialized = False
 
@@ -8,7 +6,8 @@ _initialized = False
 def setup_telemetry() -> None:
     """Configure OpenTelemetry export to Google Cloud Trace (GCP managed)."""
     global _initialized
-    if _initialized or not os.environ.get("K_SERVICE"):
+    settings = get_settings()
+    if _initialized or not settings.running_on_cloud_run:
         return
     try:
         from opentelemetry import trace
@@ -17,7 +16,7 @@ def setup_telemetry() -> None:
         from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-        project = os.environ.get("GOOGLE_CLOUD_PROJECT", "")
+        project = settings.project_id
         resource = Resource.create(
             {
                 "service.name": "permit-pilot",

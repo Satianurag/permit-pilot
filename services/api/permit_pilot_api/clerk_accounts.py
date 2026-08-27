@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import json
-import os
 
 from pwdlib import PasswordHash
 
 from permit_pilot_core.firestore.store import FirestoreStore
+from permit_pilot_core.settings import get_settings
 
 from .auth import ClerkUserInDB, refresh_clerk_users
 
@@ -19,7 +19,8 @@ def ensure_cloud_clerks(store: FirestoreStore) -> None:
         refresh_clerk_users(_clerks_from_firestore(existing))
         return
 
-    raw = os.environ.get("CLERK_USERS", "").strip()
+    settings = get_settings()
+    raw = settings.clerk_users_json.strip()
     if raw:
         users: dict[str, ClerkUserInDB] = {}
         for row in json.loads(raw):
@@ -34,10 +35,10 @@ def ensure_cloud_clerks(store: FirestoreStore) -> None:
         refresh_clerk_users(users)
         return
 
-    username = os.environ.get("CLERK_BOOTSTRAP_USERNAME", "maria").strip()
-    password = os.environ.get("CLERK_BOOTSTRAP_PASSWORD", "").strip()
-    full_name = os.environ.get("CLERK_BOOTSTRAP_FULL_NAME", "Maria Santos").strip()
-    role = os.environ.get("CLERK_BOOTSTRAP_ROLE", "clerk").strip()
+    username = settings.clerk_bootstrap_username.strip()
+    password = settings.clerk_bootstrap_password.strip()
+    full_name = settings.clerk_bootstrap_full_name.strip()
+    role = settings.clerk_bootstrap_role.strip() or "clerk"
     if not password:
         raise RuntimeError("Set CLERK_BOOTSTRAP_PASSWORD or CLERK_USERS on Cloud Run")
 
