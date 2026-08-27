@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from google.cloud import firestore
@@ -14,8 +14,13 @@ from permit_pilot_core.models import (
     CaseStatus,
     Claim,
     CreateCaseRequest,
+    DashboardActivity,
+    DashboardAlert,
+    DashboardDepartmentRollup,
+    DashboardSummary,
     DepartmentReview,
     IntakeDocument,
+    ReviewStatus,
     Task,
 )
 
@@ -570,3 +575,221 @@ class FirestoreStore:
             spans.append(TraceSpan.model_validate(snap.to_dict()))
         spans.sort(key=lambda s: s.started_at)
         return spans
+
+    def dashboard_summary(self, *, username: str, review_window_days: int = 5) -> DashboardSummary:
+        now = _now()
+        review_cutoff = now - timedelta(days=review_window_days)
+        distribution_stale_cutoff = now - timedelta(hours=24)
+        terminal = {CaseStatus.APPROVED, CaseStatus.CHANGES_REQUESTED}
+
+        open_tasks = self.list_tasks(status="open", limit=500)
+        overdue_tasks = 0
+        unassigned_tasks = 0
+        my_tasks = 0
+        for task in open_tasks:
+            if not task.assignee:
+                unassigned_tasks += 1
+            if task.assignee == username:
+                my_tasks += 1
+            if task.created_at < review_cutoff:
+                overdue_tasks += 1
+
+        all_cases = self.list_cases(limit=500)
+        cases_by_status: dict[str, int] = {}
+        awaiting_applicant = 0
+        awaiting_clerk = 0
+        in_review = 0
+        case_by_id: dict[str, Case] = {}
+
+        for case in all_cases:
+            case_by_id[case.id] = case
+            key = case.status.value
+            cases_by_status[key] = cases_by_status.get(key, 0) + 1
+            if case.status == CaseStatus.AWAITING_APPLICANT:
+                awaiting_applicant += 1
+            elif case.status == CaseStatus.AWAITING_CLERK:
+                awaiting_clerk += 1
+            elif case.status == CaseStatus.IN_REVIEW:
+                in_review += 1
+
+        dept_totals: dict[str, dict[str, int]] = {}
+        stale_distribution = 0
+        failed_department_reviews = 0
+        interrupted_workflows = 0
+        alerts: list[DashboardAlert] = []
+        alert_keys: set[str] = set()
+
+        def push_alert(kind: str, title: str, detail: str, case_id: str, tab: str = "distribution") -> None:
+            key = f"{kind}:{case_id}:{title}"
+            if key in alert_keys:
+                return
+            alert_keys.add(key)
+            alerts.append(
+                DashboardAlert(
+                    id=str(uuid.uuid4()),
+                    kind=kind,
+                    title=title,
+                    detail=detail,
+                    case_id=case_id,
+                    href=f"/cases/{case_id}?tab={tab}",
+                )
+            )
+
+        for case in all_cases:
+            if case.status in terminal:
+                continue
+
+            reviews = self.list_distribution(case.id)
+            if reviews:
+                latest = max(review.updated_at for review in reviews)
+                if latest < distribution_stale_cutoff:
+                    stale_distribution += 1
+                    push_alert(
+                        "stale_distribution",
+                        f"Distribution stale — {case.address}",
+                        "NYC Open Data pull is older than 24 hours.",
+                        case.id,
+                    )
+
+            for review in reviews:
+                dept = review.department.value
+                bucket = dept_totals.setdefault(
+                    dept,
+                    {"pass": 0, "fail": 0, "checking": 0, "needs_info": 0},
+                )
+                bucket[review.status.value] = bucket.get(review.status.value, 0) + 1
+                if review.status == ReviewStatus.FAIL:
+                    failed_department_reviews += 1
+                    push_alert(
+                        "department_fail",
+                        f"{review.department.value.title()} failed — {case.address}",
+                        review.summary,
+                        case.id,
+                    )
+                elif review.status == ReviewStatus.NEEDS_INFO:
+                    push_alert(
+                        "needs_info",
+                        f"{review.department.value.title()} needs info — {case.address}",
+                        review.summary,
+                        case.id,
+                    )
+
+            for step in self.list_workflow_steps(case.id):
+                if step.status == "interrupted":
+                    interrupted_workflows += 1
+                    push_alert(
+                        "workflow_interrupted",
+                        f"Workflow interrupted — {case.address}",
+                        step.detail or "Distribution workflow can be resumed.",
+                        case.id,
+                        "distribution",
+                    )
+                elif step.status == "failed":
+                    push_alert(
+                        "workflow_failed",
+                        f"Workflow step failed — {case.address}",
+                        step.detail or step.name,
+                        case.id,
+                        "distribution",
+                    )
+
+            if case.status == CaseStatus.AWAITING_CLERK:
+                responded_claims = [
+                    claim
+                    for claim in self.list_claims(case.id)
+                    if claim.status == "resolved" and claim.response_message
+                ]
+                if responded_claims:
+                    latest = max(responded_claims, key=lambda claim: claim.responded_at or claim.created_at)
+                    push_alert(
+                        "applicant_response",
+                        f"Applicant responded — {case.address}",
+                        latest.response_message or "Review the updated claim.",
+                        case.id,
+                        "claims",
+                    )
+
+        for task in open_tasks:
+            if task.created_at < review_cutoff:
+                case = case_by_id.get(task.case_id)
+                address = case.address if case else task.title
+                push_alert(
+                    "overdue_task",
+                    f"Overdue review — {address}",
+                    task.title,
+                    task.case_id,
+                    "distribution",
+                )
+
+        department_rollup = [
+            DashboardDepartmentRollup(
+                department=dept,
+                pass_count=counts.get("pass", 0),
+                fail_count=counts.get("fail", 0),
+                checking_count=counts.get("checking", 0),
+                needs_info_count=counts.get("needs_info", 0),
+            )
+            for dept, counts in sorted(dept_totals.items())
+        ]
+
+        priority = {"overdue_task": 0, "workflow_interrupted": 1, "workflow_failed": 2, "department_fail": 3, "applicant_response": 4}
+        alerts.sort(key=lambda item: (priority.get(item.kind, 9), item.title))
+
+        return DashboardSummary(
+            generated_at=now,
+            open_tasks=len(open_tasks),
+            overdue_tasks=overdue_tasks,
+            unassigned_tasks=unassigned_tasks,
+            my_tasks=my_tasks,
+            awaiting_applicant=awaiting_applicant,
+            awaiting_clerk=awaiting_clerk,
+            in_review=in_review,
+            stale_distribution=stale_distribution,
+            interrupted_workflows=interrupted_workflows,
+            failed_department_reviews=failed_department_reviews,
+            cases_by_status=cases_by_status,
+            department_rollup=department_rollup,
+            alerts=alerts[:12],
+        )
+
+    def list_recent_activity(
+        self,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+        action: str | None = None,
+    ) -> tuple[list[DashboardActivity], int]:
+        all_cases = self.list_cases(limit=500)
+        events: list[DashboardActivity] = []
+        action_needle = action.strip().lower() if action else None
+
+        for case in all_cases:
+            for event in self.list_audit(case.id):
+                if action_needle and event.action.lower() != action_needle:
+                    continue
+                events.append(
+                    DashboardActivity(
+                        id=event.id,
+                        case_id=case.id,
+                        address=case.address,
+                        actor=event.actor,
+                        action=event.action,
+                        detail=event.detail,
+                        at=event.at,
+                    )
+                )
+
+        events.sort(key=lambda item: item.at, reverse=True)
+        total = len(events)
+        if offset:
+            events = events[offset:]
+        if limit > 0:
+            events = events[:limit]
+        return events, total
+
+    def list_audit_actions(self) -> list[str]:
+        seen: set[str] = set()
+        for case in self.list_cases(limit=500):
+            for event in self.list_audit(case.id):
+                seen.add(event.action)
+        return sorted(seen)

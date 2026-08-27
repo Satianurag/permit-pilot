@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import EmptyState from "../components/EmptyState";
 import IntakeModal from "../components/IntakeModal";
+import PageHeader from "../components/PageHeader";
 import Skeleton from "../components/Skeleton";
 import { StatusBadge } from "../components/StatusBadge";
 import { useToast } from "../components/Toast";
@@ -87,65 +88,51 @@ export default function TasksPage() {
     .length;
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold text-pp-navy">My Tasks</h1>
-          <p className="text-sm text-slate-600">
-            Oldest review clock first. Open a row to land on Distribution — the work, not the cover sheet.
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={() => setIntakeOpen(true)}
-          className="px-4 py-2 rounded-md bg-pp-accent text-white text-sm font-medium"
-        >
-          New intake
-        </button>
-      </div>
+    <div className="space-y-6">
+      <PageHeader
+        title="My Tasks"
+        subtitle="Oldest review clock first. Open a row to land on Distribution — the work, not the cover sheet."
+        action={
+          <button type="button" onClick={() => setIntakeOpen(true)} className="pp-btn-primary">
+            + New intake
+          </button>
+        }
+      />
 
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="flex gap-1" role="group" aria-label="Task status">
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="pp-segment" role="group" aria-label="Task status">
           {FILTERS.map((item) => (
             <button
               key={item.id}
               type="button"
               aria-pressed={filter === item.id}
               onClick={() => setFilter(item.id)}
-              className={`px-3 py-1.5 text-sm rounded-md border ${
-                filter === item.id
-                  ? "bg-pp-navy text-white border-pp-navy"
-                  : "bg-white border-pp-border text-slate-700"
-              }`}
+              className="pp-segment-btn"
             >
               {item.label}
             </button>
           ))}
         </div>
-        <div className="flex gap-1" role="group" aria-label="Assignee filter">
+        <div className="pp-segment" role="group" aria-label="Assignee filter">
           {ASSIGN_FILTERS.map((item) => (
             <button
               key={item.id}
               type="button"
               aria-pressed={assignFilter === item.id}
               onClick={() => setAssignFilter(item.id)}
-              className={`px-3 py-1.5 text-sm rounded-md border ${
-                assignFilter === item.id
-                  ? "bg-pp-slate text-white border-pp-slate"
-                  : "bg-white border-pp-border text-slate-700"
-              }`}
+              className="pp-segment-btn pp-segment-btn-secondary"
             >
               {item.label}
             </button>
           ))}
         </div>
         {overdueCount > 0 && (
-          <p className="text-sm text-red-800">{overdueCount} overdue on a 5-day review clock</p>
+          <p className="text-sm text-red-800 font-medium">{overdueCount} overdue on a 5-day review clock</p>
         )}
       </div>
 
       {error && (
-        <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-md p-3" role="alert">
+        <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-xl p-3" role="alert">
           {errorMessage(error)}
         </p>
       )}
@@ -156,39 +143,23 @@ export default function TasksPage() {
           title="No tasks in this view"
           description="When distribution reviews or applicant responses need attention, they will appear here."
           action={
-            <button
-              type="button"
-              onClick={() => setIntakeOpen(true)}
-              className="px-4 py-2 rounded-md bg-pp-accent text-white text-sm"
-            >
+            <button type="button" onClick={() => setIntakeOpen(true)} className="pp-btn-primary">
               Start new intake
             </button>
           }
         />
       ) : (
-        <div className="table-scroll rounded-lg border border-pp-border bg-white">
-          <table className="min-w-full text-sm">
+        <div className="pp-table-wrap">
+          <table className="pp-table">
             <caption className="sr-only">Permit review tasks sorted by review clock</caption>
-            <thead className="bg-slate-50 text-left text-slate-600">
+            <thead>
               <tr>
-                <th scope="col" className="px-4 py-2 font-medium">
-                  Task
-                </th>
-                <th scope="col" className="px-4 py-2 font-medium">
-                  Type
-                </th>
-                <th scope="col" className="px-4 py-2 font-medium">
-                  Review clock
-                </th>
-                <th scope="col" className="px-4 py-2 font-medium">
-                  Assignee
-                </th>
-                <th scope="col" className="px-4 py-2 font-medium">
-                  Status
-                </th>
-                <th scope="col" className="px-4 py-2 font-medium">
-                  Actions
-                </th>
+                <th scope="col">Task</th>
+                <th scope="col">Type</th>
+                <th scope="col">Review clock</th>
+                <th scope="col">Assignee</th>
+                <th scope="col">Status</th>
+                <th scope="col">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -198,8 +169,8 @@ export default function TasksPage() {
                   task.status === "open" &&
                   (!task.assignee || task.assignee !== currentUser?.username);
                 return (
-                  <tr key={task.id} className="relative border-t border-pp-border hover:bg-slate-50">
-                    <td className="px-4 py-3">
+                  <tr key={task.id} className="relative">
+                    <td>
                       <Link
                         className="text-pp-accent font-medium hover:underline after:absolute after:inset-0"
                         to={`/cases/${task.case_id}?tab=distribution&from=tasks`}
@@ -207,21 +178,21 @@ export default function TasksPage() {
                         {task.title}
                       </Link>
                     </td>
-                    <td className="px-4 py-3 text-slate-600">{formatStatus(task.task_type)}</td>
-                    <td className={`px-4 py-3 ${task.status === "open" ? clockClass(clock.kind) : "text-slate-500"}`}>
+                    <td className="text-pp-muted">{formatStatus(task.task_type)}</td>
+                    <td className={task.status === "open" ? clockClass(clock.kind) : "text-pp-muted"}>
                       {task.status === "open" ? clock.label : "—"}
                     </td>
-                    <td className="px-4 py-3 text-slate-600">{task.assignee ?? "Unassigned"}</td>
-                    <td className="px-4 py-3">
+                    <td className="text-pp-muted">{task.assignee ?? "Unassigned"}</td>
+                    <td>
                       <StatusBadge status={task.status} />
                     </td>
-                    <td className="px-4 py-3 relative z-10">
+                    <td className="relative z-10">
                       {canClaim && (
                         <button
                           type="button"
                           disabled={claimingId === task.id}
                           onClick={() => void claimTask(task)}
-                          className="text-sm text-pp-accent hover:underline disabled:opacity-50"
+                          className="text-sm font-medium text-pp-accent hover:underline disabled:opacity-50"
                         >
                           {claimingId === task.id ? "Claiming…" : "Claim"}
                         </button>

@@ -8,6 +8,7 @@ import { StatusBadge } from "../components/StatusBadge";
 import TraceReplay from "../components/TraceReplay";
 import { useToast } from "../components/Toast";
 import { api, Case, CaseBundle, Claim, ConditionTemplate, DepartmentReview, ParcelContext, RelatedPermit, Task } from "../lib/api";
+import { caseBackTarget } from "../lib/caseBack";
 import { groupAuditEvents, sortDepartmentReviews } from "../lib/auditFormat";
 import { readBriefing, writeBriefing } from "../lib/briefingCache";
 import { errorMessage, isNotFoundError } from "../lib/errors";
@@ -32,7 +33,8 @@ export default function CasePage() {
   const { push } = useToast();
   const [params, setParams] = useSearchParams();
   const tab: Tab = isTab(params.get("tab")) ? (params.get("tab") as Tab) : "summary";
-  const from = params.get("from") === "search" ? "search" : "tasks";
+  const from = params.get("from") ?? "tasks";
+  const back = caseBackTarget(from);
   const [bundle, setBundle] = useState<CaseBundle | null>(null);
   const [context, setContext] = useState<{ related_permits: RelatedPermit[]; parcel: ParcelContext | null } | null>(null);
   const [contextLoading, setContextLoading] = useState(false);
@@ -59,6 +61,7 @@ export default function CasePage() {
   const [showAllPermits, setShowAllPermits] = useState(false);
   const footerRef = useRef<HTMLElement>(null);
   const mobileFooterRef = useRef<HTMLDivElement>(null);
+  const [footerPad, setFooterPad] = useState(0);
 
   const setTab = (name: Tab) => {
     const next = new URLSearchParams(params);
@@ -215,7 +218,7 @@ export default function CasePage() {
 
   useEffect(() => {
     if (!showDecisionFooter) {
-      document.documentElement.style.removeProperty("--pp-footer-height");
+      setFooterPad(0);
       return;
     }
     const sync = () => {
@@ -225,18 +228,13 @@ export default function CasePage() {
         desktop && desktop.offsetHeight > 0
           ? desktop.offsetHeight
           : mobile?.offsetHeight ?? 0;
-      if (height > 0) {
-        document.documentElement.style.setProperty("--pp-footer-height", `${height}px`);
-      }
+      setFooterPad(height > 0 ? height + 16 : 0);
     };
     sync();
     const ro = new ResizeObserver(sync);
     if (footerRef.current) ro.observe(footerRef.current);
     if (mobileFooterRef.current) ro.observe(mobileFooterRef.current);
-    return () => {
-      ro.disconnect();
-      document.documentElement.style.removeProperty("--pp-footer-height");
-    };
+    return () => ro.disconnect();
   }, [showDecisionFooter, decisionSheetOpen, failed.length, needsInfo.length, conditions.length, note]);
 
   const lookupBinForCase = () =>
@@ -360,7 +358,10 @@ export default function CasePage() {
           description="This dossier ID does not exist or you no longer have access."
           action={
             <div className="flex flex-wrap justify-center gap-2">
-              <Link to="/tasks" className="px-4 py-2 rounded-md bg-pp-accent text-white text-sm">
+              <Link to="/dashboard" className="pp-btn-primary text-sm">
+                Dashboard
+              </Link>
+              <Link to="/tasks" className="pp-btn-secondary text-sm">
                 My Tasks
               </Link>
               <Link to="/permits" className="px-4 py-2 rounded-md border border-pp-border text-sm">
@@ -376,12 +377,12 @@ export default function CasePage() {
   if (!bundle && bundleError) {
     return (
       <div className="space-y-4">
-        <Link to={from === "search" ? "/permits" : "/tasks"} className="text-sm text-pp-accent hover:underline">
-          ← Back to {from === "search" ? "search" : "tasks"}
+        <Link to={back.to} className="text-sm text-pp-accent hover:underline">
+          ← Back to {back.label}
         </Link>
         {caseStub && (
           <div>
-            <h1 className="text-2xl font-semibold text-pp-navy">{caseStub.address}</h1>
+            <h1 className="pp-page-title">{caseStub.address}</h1>
             <p className="text-sm text-slate-600 mt-1">
               BIN {caseStub.bin || "—"} · BBL {caseStub.bbl}
             </p>
@@ -392,7 +393,7 @@ export default function CasePage() {
           description={errorMessage(bundleError)}
           action={
             !isNotFoundError(bundleError) ? (
-              <button type="button" onClick={() => load()} className="px-4 py-2 rounded-md bg-pp-accent text-white text-sm">
+              <button type="button" onClick={() => load()} className="px-4 py-2 rounded-full bg-pp-accent text-white text-sm">
                 Try again
               </button>
             ) : (
@@ -411,19 +412,16 @@ export default function CasePage() {
   }
 
   return (
-    <div
-      className="space-y-4"
-      style={showDecisionFooter ? { paddingBottom: "var(--pp-footer-height, 9rem)" } : undefined}
-    >
+    <div className="space-y-4" style={footerPad > 0 ? { paddingBottom: `${footerPad}px` } : undefined}>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <Link
-            to={from === "search" ? "/permits" : "/tasks"}
+            to={back.to}
             className="text-sm text-pp-accent hover:underline"
           >
-            ← Back to {from === "search" ? "search" : "tasks"}
+            ← Back to {back.label}
           </Link>
-          <h1 className="text-2xl font-semibold text-pp-navy mt-1">{caseData.address}</h1>
+          <h1 className="pp-page-title mt-1">{caseData.address}</h1>
           <p className="text-sm text-slate-600 mt-1">
             BIN {caseData.bin || "—"} · BBL {caseData.bbl} · {caseData.work_type}
           </p>
@@ -574,7 +572,7 @@ export default function CasePage() {
                     writeBriefing(caseId, result.summary);
                   }, hasStoredBriefing ? "Clerk briefing regenerated." : "Clerk briefing generated.")
                 }
-                className="mt-4 text-sm px-3 py-1.5 rounded-md bg-pp-accent text-white disabled:opacity-50"
+                className="mt-4 text-sm px-3 py-1.5 rounded-full bg-pp-accent text-white disabled:opacity-50"
               >
                 {busy === "briefing"
                   ? "Generating…"
@@ -734,7 +732,7 @@ export default function CasePage() {
                   false,
                 )
               }
-              className="text-sm px-3 py-1.5 rounded-md bg-pp-accent text-white disabled:opacity-50"
+              className="text-sm px-3 py-1.5 rounded-full bg-pp-accent text-white disabled:opacity-50"
             >
               {busy === "refresh" ? "Refreshing…" : "Refresh from NYC Open Data"}
             </button>
@@ -885,7 +883,7 @@ export default function CasePage() {
                     setClaimText("");
                   }, "Claim recorded with manual DOB NOW reference.")
                 }
-                className="px-4 py-2 rounded-md bg-pp-accent text-white text-sm disabled:opacity-50"
+                className="px-4 py-2 rounded-full bg-pp-accent text-white text-sm disabled:opacity-50"
               >
                 {busy === "claim" ? "Saving…" : "Record claim"}
               </button>
@@ -974,7 +972,7 @@ export default function CasePage() {
                                   setRespondingClaimId(null);
                                 })
                               }
-                              className="px-3 py-1.5 rounded-md bg-pp-accent text-white text-sm disabled:opacity-50"
+                              className="px-3 py-1.5 rounded-full bg-pp-accent text-white text-sm disabled:opacity-50"
                             >
                               {busy === `respond-${claim.id}` ? "Saving…" : "Save response"}
                             </button>
@@ -1125,7 +1123,7 @@ export default function CasePage() {
                       type="button"
                       disabled={busy === "lookup-bin"}
                       onClick={() => lookupBinForCase()}
-                      className="px-3 py-1.5 rounded-md bg-pp-accent text-white text-sm disabled:opacity-50"
+                      className="px-3 py-1.5 rounded-full bg-pp-accent text-white text-sm disabled:opacity-50"
                     >
                       {busy === "lookup-bin" ? "Looking up…" : "Look up BIN from address"}
                     </button>
@@ -1203,7 +1201,7 @@ export default function CasePage() {
               type="button"
               disabled={busy === "edit-case"}
               onClick={() => saveEditCase()}
-              className="px-4 py-2 rounded-md bg-pp-accent text-white disabled:opacity-50"
+              className="px-4 py-2 rounded-full bg-pp-accent text-white disabled:opacity-50"
             >
               {busy === "edit-case" ? "Saving…" : "Save changes"}
             </button>
@@ -1216,10 +1214,7 @@ export default function CasePage() {
 
       {showDecisionFooter && (
         <>
-          <div
-            ref={mobileFooterRef}
-            className="sm:hidden fixed bottom-0 left-0 right-0 z-10 bg-white border-t border-pp-border p-3"
-          >
+          <div ref={mobileFooterRef} className="pp-decision-footer-mobile sm:hidden">
             <button
               type="button"
               onClick={() => setDecisionSheetOpen(true)}
@@ -1295,11 +1290,8 @@ export default function CasePage() {
             </div>
           </dialog>
 
-          <footer
-            ref={footerRef}
-            className="hidden sm:block fixed bottom-0 left-0 right-0 z-10 bg-white border-t border-pp-border"
-          >
-            <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex flex-col gap-3">
+          <footer ref={footerRef} className="pp-decision-footer hidden sm:block">
+            <div className="pp-decision-footer-inner py-3 flex flex-col gap-3">
               {conditions.length > 0 && (
                 <div>
                   <p className="text-xs font-medium text-slate-600 mb-2">Insert standard condition:</p>

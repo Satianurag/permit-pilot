@@ -25,29 +25,35 @@ echo "=== 2. Unauthenticated API blocked ==="
 CODE=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/tasks")
 test "$CODE" = "401"
 
-echo "=== 3. Tasks (Firestore, open only) ==="
+echo "=== 3. Dashboard summary (Firestore aggregates) ==="
+curl -fsS "${AUTH[@]}" "$BASE/api/dashboard/summary" | python3 -c "import sys,json; d=json.load(sys.stdin); assert 'open_tasks' in d and 'cases_by_status' in d"
+
+echo "=== 4. Activity feed (cross-case audit) ==="
+curl -fsS "${AUTH[@]}" "$BASE/api/activity?limit=5" | python3 -c "import sys,json; d=json.load(sys.stdin); assert 'items' in d and 'total' in d"
+
+echo "=== 5. Tasks (Firestore, open only) ==="
 TASKS=$(curl -fsS "${AUTH[@]}" "$BASE/api/tasks")
 echo "$TASKS" | python3 -c "import sys,json; d=json.load(sys.stdin); assert len(d)>=1, 'no open tasks'"
 
-echo "=== 4. Case bundle + distribution (live Socrata-backed) ==="
+echo "=== 6. Case bundle + distribution (live Socrata-backed) ==="
 CASE_ID=$(echo "$TASKS" | python3 -c "import sys,json; print(json.load(sys.stdin)[0]['case_id'])")
 curl -fsS "${AUTH[@]}" "$BASE/api/cases/$CASE_ID/bundle" | python3 -c "import sys,json; d=json.load(sys.stdin); assert len(d['distribution'])>=5; util=[r for r in d['distribution'] if r['department']=='utilities'][0]; assert 'skr7-cxt3' in str(util['evidence']), 'utilities must use DEP ECB'"
 
-echo "=== 5. Clerk briefing ==="
+echo "=== 7. Clerk briefing ==="
 curl -fsS "${AUTH[@]}" -X POST "$BASE/api/cases/$CASE_ID/orchestrate" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d.get('summary')"
 
-echo "=== 6. Trace + observability ==="
+echo "=== 8. Trace + observability ==="
 curl -fsS "${AUTH[@]}" "$BASE/api/cases/$CASE_ID/trace" >/dev/null
 curl -fsS "${AUTH[@]}" "$BASE/api/config/observability?case_id=$CASE_ID" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d.get('cloud_trace_url')"
 
-echo "=== 7. Permit search + conditions library ==="
+echo "=== 9. Permit search + conditions library ==="
 curl -fsS "${AUTH[@]}" "$BASE/api/cases?q=BIN" >/dev/null
 curl -fsS "${AUTH[@]}" "$BASE/api/config/conditions" | python3 -c "import sys,json; d=json.load(sys.stdin); assert len(d)>=3, 'conditions library'"
 
-echo "=== 8. NYC address resolve (live PLUTO) ==="
+echo "=== 10. NYC address resolve (live PLUTO) ==="
 curl -fsS "${AUTH[@]}" "$BASE/api/nyc/resolve-address?address=520%20FIFTH%20AVE&borough=Manhattan" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['matches'][0]['bbl']"
 
-echo "=== 9. SPA login route ==="
+echo "=== 11. SPA login route ==="
 curl -fsS -o /dev/null -w "%{http_code}\n" "$BASE/login" | grep -q 200
 
 echo "ALL CHECKS PASSED — $BASE"

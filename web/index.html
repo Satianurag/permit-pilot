@@ -311,13 +311,101 @@
     <footer class="pp-footer">
       <div class="pp-footer-inner">
         <span>© 2026 Permit Pilot · All Things Agentic · Fortified Enterprise Fleet</span>
-        <div>
+        <div class="pp-footer-links">
+          <button type="button" class="pp-footer-cookie" id="pp-cookie-reopen">Cookie settings</button>
+          <a href="/dashboard">Dashboard</a>
+          <a href="/activity">Activity</a>
           <a href="/tasks">Task inbox</a>
           <a href="/permits">Permit search</a>
           <a href="/login">Sign in</a>
         </div>
       </div>
     </footer>
+
+    <div id="pp-cookie-banner" class="pp-cookie-banner" role="region" aria-label="Cookie notice" aria-labelledby="pp-cookie-title" aria-describedby="pp-cookie-desc" hidden>
+      <div class="pp-cookie-banner-inner">
+        <div class="pp-cookie-banner-accent" aria-hidden="true"></div>
+        <div class="pp-cookie-banner-body">
+          <h2 id="pp-cookie-title" class="pp-cookie-title">Cookie preferences</h2>
+          <p id="pp-cookie-desc" class="pp-cookie-desc">
+            We store your choice locally and may load map tiles and fonts for the NYC reference maps. No advertising or
+            cross-site tracking.
+          </p>
+          <div class="pp-cookie-banner-actions">
+            <button type="button" class="pp-btn pp-btn-ghost pp-cookie-reject-all" id="pp-cookie-reject-all">
+              Reject all
+            </button>
+            <button type="button" class="pp-btn pp-btn-primary pp-cookie-accept-all" id="pp-cookie-accept-all">
+              Accept all
+            </button>
+          </div>
+          <button type="button" class="pp-cookie-banner-link" id="pp-cookie-open-settings">
+            Cookie settings
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div id="pp-cookie-panel" class="pp-cookie-panel" role="dialog" aria-labelledby="pp-cookie-panel-title" aria-modal="true" hidden>
+      <div class="pp-cookie-panel-backdrop" id="pp-cookie-backdrop" tabindex="-1" aria-hidden="true"></div>
+      <div class="pp-cookie-panel-sheet">
+        <header class="pp-cookie-panel-header">
+          <div>
+            <p class="pp-cookie-eyebrow">Privacy</p>
+            <h2 id="pp-cookie-panel-title" class="pp-cookie-panel-title">Cookie settings</h2>
+            <p class="pp-cookie-panel-lead">
+              Choose how Permit Pilot may use storage on this device. Strictly necessary items keep the site working;
+              functional items power the interactive NYC maps and hosted fonts.
+            </p>
+          </div>
+          <button type="button" class="pp-cookie-close" id="pp-cookie-close" aria-label="Close cookie settings">
+            <span aria-hidden="true">×</span>
+          </button>
+        </header>
+
+        <div class="pp-cookie-options">
+          <article class="pp-cookie-option">
+            <div class="pp-cookie-option-head">
+              <h3>Strictly necessary</h3>
+              <span class="pp-cookie-badge">Always active</span>
+            </div>
+            <p>Stores your cookie preference so we do not ask again on every visit.</p>
+            <dl class="pp-cookie-meta">
+              <div><dt>Storage</dt><dd>Browser local storage</dd></div>
+              <div><dt>Retention</dt><dd>12 months</dd></div>
+            </dl>
+          </article>
+
+          <article class="pp-cookie-option">
+            <div class="pp-cookie-option-head">
+              <h3>Functional</h3>
+              <label class="pp-cookie-toggle">
+                <input type="checkbox" id="pp-cookie-functional" checked />
+                <span class="pp-cookie-toggle-ui" aria-hidden="true"></span>
+                <span class="sr-only">Allow functional cookies and third-party map or font requests</span>
+              </label>
+            </div>
+            <p>
+              Loads MapLibre map tiles from CARTO and typography from Google Fonts so the landing maps and reference
+              case explorer work as designed.
+            </p>
+            <dl class="pp-cookie-meta">
+              <div><dt>Providers</dt><dd>CARTO, Google Fonts, unpkg / cdnjs (MapLibre, GSAP)</dd></div>
+              <div><dt>Retention</dt><dd>Session or provider default</dd></div>
+            </dl>
+          </article>
+        </div>
+
+        <footer class="pp-cookie-panel-footer">
+          <button type="button" class="pp-btn pp-btn-secondary" id="pp-cookie-reject-optional">
+            Reject all
+          </button>
+          <button type="button" class="pp-btn pp-btn-primary" id="pp-cookie-save">
+            Save preferences
+          </button>
+        </footer>
+      </div>
+    </div>
 
     <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>

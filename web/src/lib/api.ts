@@ -177,6 +177,58 @@ export interface AuditEvent {
   at: string;
 }
 
+export interface DashboardAlert {
+  id: string;
+  kind: string;
+  title: string;
+  detail: string;
+  case_id: string;
+  href: string;
+}
+
+export interface DashboardDepartmentRollup {
+  department: string;
+  pass_count: number;
+  fail_count: number;
+  checking_count: number;
+  needs_info_count: number;
+}
+
+export interface DashboardActivity {
+  id: string;
+  case_id: string;
+  address: string;
+  actor: string;
+  action: string;
+  detail: string;
+  at: string;
+}
+
+export interface DashboardSummary {
+  generated_at: string;
+  open_tasks: number;
+  overdue_tasks: number;
+  unassigned_tasks: number;
+  my_tasks: number;
+  awaiting_applicant: number;
+  awaiting_clerk: number;
+  in_review: number;
+  stale_distribution: number;
+  interrupted_workflows: number;
+  failed_department_reviews: number;
+  cases_by_status: Record<string, number>;
+  department_rollup: DashboardDepartmentRollup[];
+  alerts: DashboardAlert[];
+}
+
+export interface ActivityFeedResponse {
+  items: DashboardActivity[];
+  total: number;
+  limit: number;
+  offset: number;
+  actions: string[];
+}
+
 export interface ClerkProfile {
   username: string;
   full_name: string;
@@ -232,6 +284,12 @@ export const api = {
     return res.json() as Promise<{ access_token: string; token_type: string }>;
   },
   me: () => get<ClerkProfile>("/auth/me"),
+  dashboardSummary: () => get<DashboardSummary>("/dashboard/summary"),
+  listActivity: (limit = 50, offset = 0, action?: string) => {
+    const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+    if (action?.trim()) params.set("action", action.trim());
+    return get<ActivityFeedResponse>(`/activity?${params.toString()}`);
+  },
   listTasks: (status = "open", mine = false, unassigned = false) => {
     const params = new URLSearchParams({ status });
     if (mine) params.set("mine", "true");

@@ -14,7 +14,7 @@ from permit_pilot_core.observability.telemetry import setup_telemetry
 from permit_pilot_core.seeds import ensure_seeded
 from permit_pilot_api.clerk_accounts import ensure_cloud_clerks
 from permit_pilot_api.config import cors_origins, gcp_project_id, seed_on_startup
-from permit_pilot_api.routes import agents, auth_routes, cases, config, intake, nyc, orchestrate, tasks, workflow
+from permit_pilot_api.routes import activity, agents, auth_routes, cases, config, dashboard, intake, nyc, orchestrate, tasks, workflow
 
 
 @asynccontextmanager
@@ -54,6 +54,8 @@ app.include_router(nyc.router, prefix="/api")
 app.include_router(workflow.router, prefix="/api")
 app.include_router(orchestrate.router, prefix="/api")
 app.include_router(config.router, prefix="/api")
+app.include_router(dashboard.router, prefix="/api")
+app.include_router(activity.router, prefix="/api")
 app.include_router(agents.router, prefix="/api")
 
 
@@ -70,7 +72,7 @@ if _static_root and Path(_static_root).is_dir():
 
     _SPA_ENTRY = Path(_static_root) / "app.html"
     _LANDING_ENTRY = Path(_static_root) / "index.html"
-    _SPA_PREFIXES = ("login", "tasks", "permits", "cases")
+    _SPA_PREFIXES = ("login", "dashboard", "activity", "tasks", "permits", "agents", "cases")
 
     def _spa_entry_for(spa_path: str) -> Path:
         if spa_path in _SPA_PREFIXES or spa_path.startswith("cases/"):

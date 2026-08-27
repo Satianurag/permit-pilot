@@ -184,3 +184,55 @@ class CaseDecision(BaseModel):
     decision: str
     note: str
     override: bool = False
+
+
+class DashboardAlert(BaseModel):
+    id: str
+    kind: str
+    title: str
+    detail: str
+    case_id: str
+    href: str
+
+
+class DashboardDepartmentRollup(BaseModel):
+    department: str
+    pass_count: int = 0
+    fail_count: int = 0
+    checking_count: int = 0
+    needs_info_count: int = 0
+
+
+class DashboardActivity(BaseModel):
+    id: str
+    case_id: str
+    address: str
+    actor: str
+    action: str
+    detail: str
+    at: datetime
+
+
+class DashboardSummary(BaseModel):
+    generated_at: datetime
+    open_tasks: int
+    overdue_tasks: int
+    unassigned_tasks: int
+    my_tasks: int
+    awaiting_applicant: int
+    awaiting_clerk: int
+    in_review: int
+    stale_distribution: int
+    interrupted_workflows: int
+    failed_department_reviews: int
+    cases_by_status: dict[str, int]
+    department_rollup: list[DashboardDepartmentRollup]
+    alerts: list[DashboardAlert]
+
+
+class ActivityFeed(BaseModel):
+    items: list[DashboardActivity]
+    total: int
+    limit: int
+    offset: int
+    actions: list[str] = Field(default_factory=list)

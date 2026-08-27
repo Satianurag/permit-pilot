@@ -1,10 +1,11 @@
-import { useState } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
-import AgentCatalog from "./components/AgentCatalog";
 import AppShell from "./components/AppShell";
 import { ToastProvider } from "./components/Toast";
 import { isAuthenticated } from "./lib/auth";
+import ActivityPage from "./pages/ActivityPage";
+import AgentsPage from "./pages/AgentsPage";
 import CasePage from "./pages/CasePage";
+import DashboardPage from "./pages/DashboardPage";
 import DossiersPage from "./pages/DossiersPage";
 import LoginPage from "./pages/LoginPage";
 import NotFoundPage from "./pages/NotFoundPage";
@@ -19,8 +20,6 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 }
 
 export default function App() {
-  const [agentsOpen, setAgentsOpen] = useState(false);
-
   return (
     <ToastProvider>
       <Routes>
@@ -28,19 +27,21 @@ export default function App() {
         <Route
           element={
             <ProtectedRoute>
-              <AppShell onOpenAgents={() => setAgentsOpen(true)} />
+              <AppShell />
             </ProtectedRoute>
           }
         >
-          <Route path="/" element={<Navigate to="/tasks" replace />} />
+          <Route path="/" element={<Navigate to="/dashboard" replace />} />
+          <Route path="/dashboard" element={<DashboardPage />} />
+          <Route path="/activity" element={<ActivityPage />} />
           <Route path="/tasks" element={<TasksPage />} />
           <Route path="/permits" element={<DossiersPage />} />
+          <Route path="/agents" element={<AgentsPage />} />
           <Route path="/cases/:id" element={<CasePage />} />
           <Route path="*" element={<NotFoundPage />} />
         </Route>
         <Route path="*" element={<NotFoundPage />} />
       </Routes>
-      <AgentCatalog open={agentsOpen} onClose={() => setAgentsOpen(false)} />
     </ToastProvider>
   );
 }

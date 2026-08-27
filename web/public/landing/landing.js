@@ -57,6 +57,126 @@
   const burger = document.querySelector(".pp-burger");
   const nav = document.querySelector(".pp-nav");
 
+  // ── Cookie consent ──
+  const COOKIE_KEY = "pp_cookie_consent_v1";
+  const banner = document.getElementById("pp-cookie-banner");
+  const panel = document.getElementById("pp-cookie-panel");
+  const backdrop = document.getElementById("pp-cookie-backdrop");
+  const functionalToggle = document.getElementById("pp-cookie-functional");
+  let mapsInitialized = false;
+
+  function readConsent() {
+    try {
+      const raw = localStorage.getItem(COOKIE_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (typeof parsed?.functional !== "boolean") return null;
+      return parsed;
+    } catch {
+      return null;
+    }
+  }
+
+  function writeConsent(functional) {
+    localStorage.setItem(
+      COOKIE_KEY,
+      JSON.stringify({
+        necessary: true,
+        functional,
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+  }
+
+  function disableMaps() {
+    while (maps.length) {
+      maps.pop()?.remove();
+    }
+    casesMap = null;
+    mapsInitialized = false;
+  }
+
+  function applyConsent(consent) {
+    document.body.classList.toggle("pp-maps-disabled", !consent.functional);
+    if (functionalToggle) functionalToggle.checked = consent.functional;
+    if (consent.functional) initMaps();
+    else disableMaps();
+  }
+
+  function hideBanner() {
+    if (!banner) return;
+    banner.hidden = true;
+    banner.setAttribute("aria-hidden", "true");
+  }
+
+  function showBanner() {
+    if (!banner) return;
+    banner.hidden = false;
+    banner.setAttribute("aria-hidden", "false");
+  }
+
+  function panelFocusables() {
+    if (!panel) return [];
+    return [...panel.querySelectorAll(
+      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    )];
+  }
+
+  function trapPanelFocus(event) {
+    if (!panel || panel.hidden || event.key !== "Tab") return;
+    const items = panelFocusables();
+    if (!items.length) return;
+    const first = items[0];
+    const last = items[items.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  function closePanel() {
+    if (!panel) return;
+    panel.hidden = true;
+    document.body.style.overflow = "";
+    panel.removeEventListener("keydown", trapPanelFocus);
+  }
+
+  function openPanel() {
+    if (!panel) return;
+    const consent = readConsent();
+    if (functionalToggle) functionalToggle.checked = consent?.functional ?? true;
+    panel.hidden = false;
+    document.body.style.overflow = "hidden";
+    panel.addEventListener("keydown", trapPanelFocus);
+    requestAnimationFrame(() => document.getElementById("pp-cookie-close")?.focus());
+  }
+
+  function saveConsent(functional) {
+    const consent = { necessary: true, functional };
+    writeConsent(functional);
+    applyConsent(consent);
+    hideBanner();
+    closePanel();
+  }
+
+  document.getElementById("pp-cookie-accept-all")?.addEventListener("click", () => saveConsent(true));
+  document.getElementById("pp-cookie-reject-all")?.addEventListener("click", () => saveConsent(false));
+  document.getElementById("pp-cookie-save")?.addEventListener("click", () => {
+    saveConsent(Boolean(functionalToggle?.checked));
+  });
+  document.getElementById("pp-cookie-reject-optional")?.addEventListener("click", () => saveConsent(false));
+  document.getElementById("pp-cookie-open-settings")?.addEventListener("click", openPanel);
+  document.getElementById("pp-cookie-reopen")?.addEventListener("click", openPanel);
+  document.getElementById("pp-cookie-close")?.addEventListener("click", closePanel);
+  backdrop?.addEventListener("click", closePanel);
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && panel && !panel.hidden) closePanel();
+  });
+
   window.addEventListener(
     "scroll",
     () => header?.classList.toggle("is-scrolled", window.scrollY > 32),
@@ -114,12 +234,20 @@
   const MAP_STYLE = "https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json";
   const maps = [];
 
+  function initMaps() {
+    if (mapsInitialized) return;
+    mapsInitialized = true;
+    bootMaps();
+  }
+
   function makePinEl(color) {
     const el = document.createElement("div");
     el.className = "pp-map-pin";
     el.style.setProperty("--pin-color", color);
     return el;
   }
+
+  let casesMap = null;
 
   function initMap(containerId, options = {}) {
     const el = document.getElementById(containerId);
@@ -176,46 +304,48 @@
     else map.on("load", onLoad);
   }
 
-  // Hero overview map
-  const heroMap = initMap("pp-hero-map", {
-    center: [-73.87, 40.72],
-    zoom: 10.4,
-    pitch: 38,
-    bearing: -18,
-    interactive: false,
-  });
+  function bootMaps() {
+    // Hero overview map
+    const heroMap = initMap("pp-hero-map", {
+      center: [-73.87, 40.72],
+      zoom: 10.4,
+      pitch: 38,
+      bearing: -18,
+      interactive: false,
+    });
 
-  if (heroMap) {
-    heroMap.scrollZoom.disable();
-    heroMap.boxZoom.disable();
-    heroMap.dragRotate.disable();
-    heroMap.dragPan.disable();
-    heroMap.keyboard.disable();
-    heroMap.doubleClickZoom.disable();
-    heroMap.touchZoomRotate.disable();
-    addCaseMarkers(heroMap);
+    if (heroMap) {
+      heroMap.scrollZoom.disable();
+      heroMap.boxZoom.disable();
+      heroMap.dragRotate.disable();
+      heroMap.dragPan.disable();
+      heroMap.keyboard.disable();
+      heroMap.doubleClickZoom.disable();
+      heroMap.touchZoomRotate.disable();
+      addCaseMarkers(heroMap);
 
-    if (!reduced) {
-      let t = 0;
-      const animate = () => {
-        t += 0.0004;
-        heroMap.setBearing(-18 + Math.sin(t) * 4);
-        heroMap.setPitch(38 + Math.sin(t * 0.7) * 3);
-        requestAnimationFrame(animate);
-      };
-      heroMap.on("load", () => requestAnimationFrame(animate));
+      if (!reduced) {
+        let t = 0;
+        const animate = () => {
+          t += 0.0004;
+          heroMap.setBearing(-18 + Math.sin(t) * 4);
+          heroMap.setPitch(38 + Math.sin(t * 0.7) * 3);
+          requestAnimationFrame(animate);
+        };
+        heroMap.on("load", () => requestAnimationFrame(animate));
+      }
     }
-  }
 
-  // Cases explorer map
-  const casesMap = initMap("pp-cases-map", {
-    center: [-73.87, 40.72],
-    zoom: 10.2,
-    pitch: 42,
-    bearing: -14,
-    nav: true,
-  });
-  addCaseMarkers(casesMap, { flyOnClick: true });
+    // Cases explorer map
+    casesMap = initMap("pp-cases-map", {
+      center: [-73.87, 40.72],
+      zoom: 10.2,
+      pitch: 42,
+      bearing: -14,
+      nav: true,
+    });
+    addCaseMarkers(casesMap, { flyOnClick: true });
+  }
 
   function selectCase(id) {
     const c = CASES.find((x) => x.id === id);
@@ -278,6 +408,15 @@
 
   // Resize maps
   window.addEventListener("resize", () => maps.forEach((m) => m.resize()));
+
+  const existingConsent = readConsent();
+  if (existingConsent) {
+    applyConsent(existingConsent);
+    hideBanner();
+  } else {
+    document.body.classList.add("pp-maps-disabled");
+    requestAnimationFrame(showBanner);
+  }
 
   // Expose for debugging
   window.PP_LANDING = { CASES, DEPARTMENTS, selectCase };

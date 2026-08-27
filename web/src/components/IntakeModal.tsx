@@ -196,13 +196,13 @@ export default function IntakeModal({ open, onClose, onCreated }: Props) {
               ref={firstFieldRef}
               id="intake-address"
               required
-              className="flex-1 border border-pp-border rounded-md px-3 py-2 text-sm"
+              className="pp-input"
               value={form.address}
               onChange={(e) => setForm({ ...form, address: e.target.value })}
             />
             <select
               aria-label="Borough for address lookup"
-              className="border border-pp-border rounded-md px-3 py-2 text-sm"
+              className="pp-btn-secondary shrink-0"
               value={lookupBorough}
               onChange={(e) => setLookupBorough(e.target.value)}
             >
@@ -248,7 +248,7 @@ export default function IntakeModal({ open, onClose, onCreated }: Props) {
               id="intake-bbl"
               required
               inputMode="numeric"
-              className="mt-1 w-full border border-pp-border rounded-md px-3 py-2 text-sm font-mono"
+              className="mt-1 w-full pp-input font-mono"
               value={form.bbl}
               onChange={(e) => onBbl(e.target.value)}
             />
@@ -260,7 +260,7 @@ export default function IntakeModal({ open, onClose, onCreated }: Props) {
             <input
               id="intake-bin"
               inputMode="numeric"
-              className="mt-1 w-full border border-pp-border rounded-md px-3 py-2 text-sm font-mono"
+              className="mt-1 w-full pp-input font-mono"
               value={form.bin}
               onChange={(e) => setForm({ ...form, bin: digitsOnly(e.target.value).slice(0, 7) })}
             />
@@ -273,7 +273,7 @@ export default function IntakeModal({ open, onClose, onCreated }: Props) {
             </label>
             <input
               id="intake-owner"
-              className="mt-1 w-full border border-pp-border rounded-md px-3 py-2 text-sm"
+              className="mt-1 w-full pp-input"
               value={form.owner ?? ""}
               onChange={(e) => setForm({ ...form, owner: e.target.value })}
             />
@@ -285,7 +285,7 @@ export default function IntakeModal({ open, onClose, onCreated }: Props) {
             <input
               id="intake-borough"
               readOnly={boroughLocked}
-              className="mt-1 w-full border border-pp-border rounded-md px-3 py-2 text-sm read-only:bg-slate-50"
+              className="mt-1 w-full pp-input read-only:bg-pp-paper-2"
               value={form.borough ?? ""}
               onChange={(e) => setForm({ ...form, borough: e.target.value })}
             />
@@ -299,7 +299,7 @@ export default function IntakeModal({ open, onClose, onCreated }: Props) {
           <input
             id="intake-work"
             required
-            className="mt-1 w-full border border-pp-border rounded-md px-3 py-2 text-sm"
+            className="mt-1 w-full pp-input"
             value={form.work_type}
             onChange={(e) => setForm({ ...form, work_type: e.target.value })}
           />
@@ -310,7 +310,7 @@ export default function IntakeModal({ open, onClose, onCreated }: Props) {
           </label>
           <textarea
             id="intake-packet"
-            className="mt-1 w-full border border-pp-border rounded-md px-3 py-2 text-sm min-h-24"
+            className="mt-1 w-full pp-input min-h-24"
             placeholder="SSN, email, and phone will be redacted automatically."
             value={form.packet_text}
             onChange={(e) => {
@@ -360,7 +360,7 @@ export default function IntakeModal({ open, onClose, onCreated }: Props) {
           <button
             type="submit"
             disabled={loading}
-            className="px-4 py-2 text-sm rounded-md bg-pp-accent text-white disabled:opacity-50"
+            className="pp-btn-primary disabled:opacity-50"
           >
             {loading ? "Running distribution…" : "Create case"}
           </button>

@@ -14,6 +14,8 @@ export default defineConfig({
           const path = req.url?.split("?")[0] ?? "";
           if (
             path === "/login" ||
+            path === "/dashboard" ||
+            path === "/activity" ||
             path === "/tasks" ||
             path === "/permits" ||
             path.startsWith("/cases/")

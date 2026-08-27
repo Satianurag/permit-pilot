@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import EmptyState from "../components/EmptyState";
+import PageHeader from "../components/PageHeader";
 import Skeleton from "../components/Skeleton";
 import { StatusBadge } from "../components/StatusBadge";
 import { api, Case } from "../lib/api";
@@ -60,40 +61,38 @@ export default function DossiersPage() {
   };
 
   return (
-    <div className="space-y-4">
-      <div>
-        <h1 className="text-2xl font-semibold text-pp-navy">Permit search</h1>
-        <p className="text-sm text-slate-600">
-          Find a dossier by address, BBL, BIN, owner, or status. Search waits 300ms after you stop typing.
-        </p>
+    <div className="space-y-6">
+      <PageHeader
+        title="Permit search"
+        subtitle="Find a dossier by address, BBL, BIN, owner, or status. Search waits 300ms after you stop typing."
+      />
+
+      <div className="pp-panel max-w-4xl">
+        <div className="flex flex-col sm:flex-row gap-3">
+          <label className="block flex-1">
+            <span className="block text-sm font-medium text-pp-navy mb-1.5">Search</span>
+            <input
+              className="pp-input"
+              placeholder="Address, BBL, BIN, owner, status…"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+            />
+          </label>
+          <label className="block sm:w-56">
+            <span className="block text-sm font-medium text-pp-navy mb-1.5">Status</span>
+            <select className="pp-select" value={urlStatus} onChange={(e) => setStatus(e.target.value)}>
+              {STATUS_FILTERS.map((item) => (
+                <option key={item.id || "all"} value={item.id}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
       </div>
-      <div className="flex flex-col sm:flex-row gap-3 max-w-3xl">
-        <label className="block flex-1">
-          <span className="sr-only">Search permits</span>
-          <input
-            className="w-full border border-pp-border rounded-md px-3 py-2 text-sm"
-            placeholder="Search address, BBL, BIN, owner, status…"
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-          />
-        </label>
-        <label className="block sm:w-56">
-          <span className="sr-only">Filter by status</span>
-          <select
-            className="w-full border border-pp-border rounded-md px-3 py-2 text-sm"
-            value={urlStatus}
-            onChange={(e) => setStatus(e.target.value)}
-          >
-            {STATUS_FILTERS.map((item) => (
-              <option key={item.id || "all"} value={item.id}>
-                {item.label}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
+
       {error && (
-        <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-md p-3" role="alert">
+        <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-xl p-3" role="alert">
           {errorMessage(error)}
         </p>
       )}
@@ -102,32 +101,22 @@ export default function DossiersPage() {
       ) : cases.length === 0 ? (
         <EmptyState title="No permits match your search" description="Try a different address, BBL, BIN, or status." />
       ) : (
-        <div className="table-scroll rounded-lg border border-pp-border bg-white">
-          <table className="min-w-full text-sm">
+        <div className="pp-table-wrap">
+          <table className="pp-table">
             <caption className="sr-only">Matching permit dossiers</caption>
-            <thead className="bg-slate-50 text-left text-slate-600">
+            <thead>
               <tr>
-                <th scope="col" className="px-4 py-2 font-medium">
-                  Address
-                </th>
-                <th scope="col" className="px-4 py-2 font-medium">
-                  BIN / BBL
-                </th>
-                <th scope="col" className="px-4 py-2 font-medium">
-                  Work
-                </th>
-                <th scope="col" className="px-4 py-2 font-medium">
-                  Status
-                </th>
-                <th scope="col" className="px-4 py-2 font-medium">
-                  Updated
-                </th>
+                <th scope="col">Address</th>
+                <th scope="col">BIN / BBL</th>
+                <th scope="col">Work</th>
+                <th scope="col">Status</th>
+                <th scope="col">Updated</th>
               </tr>
             </thead>
             <tbody>
               {cases.map((item) => (
-                <tr key={item.id} className="relative border-t border-pp-border hover:bg-slate-50">
-                  <td className="px-4 py-3">
+                <tr key={item.id} className="relative">
+                  <td>
                     <Link
                       className="text-pp-accent font-medium hover:underline after:absolute after:inset-0"
                       to={`/cases/${item.id}?from=search`}
@@ -135,14 +124,14 @@ export default function DossiersPage() {
                       {item.address}
                     </Link>
                   </td>
-                  <td className="px-4 py-3 text-slate-600">
+                  <td className="text-pp-muted">
                     {item.bin || "—"} · {item.bbl}
                   </td>
-                  <td className="px-4 py-3 text-slate-600 max-w-xs truncate">{item.work_type}</td>
-                  <td className="px-4 py-3">
+                  <td className="text-pp-muted max-w-xs truncate">{item.work_type}</td>
+                  <td>
                     <StatusBadge status={item.status} />
                   </td>
-                  <td className="px-4 py-3 text-slate-500">{new Date(item.updated_at).toLocaleString()}</td>
+                  <td className="text-pp-muted">{new Date(item.updated_at).toLocaleString()}</td>
                 </tr>
               ))}
             </tbody>
