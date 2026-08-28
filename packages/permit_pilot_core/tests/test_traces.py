@@ -1,4 +1,4 @@
-"""TraceRecorder parent/child spans and Langfuse removal."""
+"""TraceRecorder parent/child spans (Langfuse is not used)."""
 
 from __future__ import annotations
 

@@ -1,7 +1,12 @@
+"""Engine fallback: evidence → labeled deterministic reviews when Agent Runtime is down."""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from permit_pilot_core.distribution.critic import review_critic as critic_policy
+from permit_pilot_core.distribution.evidence import EvidenceClient
+from permit_pilot_core.distribution.ordinance import get_section
 from permit_pilot_core.models import (
     Citation,
     Department,
@@ -9,84 +14,34 @@ from permit_pilot_core.models import (
     EvidenceItem,
     ReviewStatus,
 )
-from permit_pilot_core.distribution.ordinance_index import citation_valid_for_department, is_known_citation
-from permit_pilot_core.settings import get_settings
-from permit_pilot_core.socrata import datasets as ds
 from permit_pilot_core.socrata.client import SocrataClient
+from permit_pilot_core.settings import get_settings
 
-BOROUGH_NAMES = {
-    "MN": "MANHATTAN",
-    "BX": "BRONX",
-    "BK": "BROOKLYN",
-    "QN": "QUEENS",
-    "SI": "STATEN ISLAND",
-}
-
-def _citation_url() -> str:
-    return get_settings().citation_source_url
-
-
-def _building_fail_citation() -> Citation:
-    return Citation(
-        code="1 RCNY 101-07",
-        excerpt="Open DOB violations must be resolved or dismissed before permit approval.",
-        source_url=_citation_url(),
-    )
-
-
-def _fire_fail_citation() -> Citation:
-    return Citation(
-        code="FC 901.7",
-        excerpt="Open fire code violations require correction or documented clearance before approval.",
-        source_url=_citation_url(),
-    )
-
-
-def _housing_fail_citation() -> Citation:
-    return Citation(
-        code="HMC §27-2115",
-        excerpt="Class A or B HPD violations must be corrected before related permit work proceeds.",
-        source_url=_citation_url(),
-    )
-
-
-def _house_number(address: str) -> str:
-    token = address.strip().split(" ", 1)[0]
-    return token.replace("'", "''")
+GENERATED_BY = "engine_fallback"
 
 
 def _now() -> datetime:
     return datetime.now(UTC)
 
 
-def _is_active_dob_violation(row: dict) -> bool:
-    category = str(row.get("violation_category", "")).upper()
-    if "ACTIVE" in category:
-        return True
-    if category and "CLOSED" in category:
-        return False
-    disposition = str(row.get("disposition_date", "")).strip()
-    return not disposition
+def _cite(code: str) -> Citation:
+    section = get_section(code)
+    excerpt = str(section.get("text") or "")[:240] if section.get("found") else code
+    return Citation(code=code, excerpt=excerpt, source_url=get_settings().citation_source_url)
 
 
-def _is_open_hpd_violation(row: dict) -> bool:
-    approved = str(row.get("approveddate", "")).strip()
-    if approved:
-        return False
-    violation_class = str(row.get("class", "")).upper()
-    return violation_class in {"A", "B", "C", "I"} or not approved
-
-
-def _is_open_fdny_violation(row: dict) -> bool:
-    status = str(row.get("violation_status", row.get("status", ""))).upper()
-    if not status:
-        return False
-    return status not in {"CLOSED", "DISMISSED", "RESOLVED", "PAID"}
+def _evidence_items(payload: dict) -> list[EvidenceItem]:
+    dataset_id = str(payload.get("dataset_id") or "")
+    items: list[EvidenceItem] = []
+    for label, value in (payload.get("facts") or {}).items():
+        items.append(EvidenceItem(source="NYC Open Data", dataset_id=dataset_id, label=str(label), value=value))
+    return items
 
 
 class DistributionEngine:
     def __init__(self, socrata: SocrataClient | None = None) -> None:
         self._socrata = socrata or SocrataClient()
+        self._evidence = EvidenceClient(self._socrata)
 
     async def run_departments(self, *, bbl: str, bin_: str, work_type: str) -> list[DepartmentReview]:
         return [
@@ -104,379 +59,234 @@ class DistributionEngine:
         return reviews
 
     async def review_zoning(self, *, bbl: str) -> DepartmentReview:
-        rows = await self._socrata.pluto_by_bbl(bbl)
-        if not rows:
+        payload = await self._evidence.lookup_pluto(bbl)
+        facts = payload.get("facts") or {}
+        if not facts.get("found"):
             return DepartmentReview(
                 department=Department.ZONING,
                 status=ReviewStatus.NEEDS_INFO,
                 summary="No PLUTO record found for this BBL.",
+                evidence=_evidence_items(payload),
                 updated_at=_now(),
+                generated_by=GENERATED_BY,
             )
-        lot = rows[0]
-        district = lot.get("zonedist1") or lot.get("zonedist")
-        landuse = lot.get("landuse")
-        histdist = lot.get("histdist")
-        findings = [
-            f"Zoning district: {district}",
-            f"Land use code: {landuse}",
-            f"Historic district field: {histdist or 'none'}",
-        ]
-        evidence = [
-            EvidenceItem(
-                source="NYC Open Data",
-                dataset_id=ds.PLUTO,
-                label="zonedist1",
-                value=district,
-            ),
-            EvidenceItem(
-                source="NYC Open Data",
-                dataset_id=ds.PLUTO,
-                label="landuse",
-                value=landuse,
-            ),
-        ]
+        district = facts.get("zonedist1")
         return DepartmentReview(
             department=Department.ZONING,
             status=ReviewStatus.PASS,
             summary=f"PLUTO confirms zoning district {district}.",
-            findings=findings,
-            evidence=evidence,
+            findings=[
+                f"Zoning district: {district}",
+                f"Land use code: {facts.get('landuse')}",
+                f"Historic district field: {facts.get('histdist') or 'none'}",
+            ],
+            evidence=_evidence_items(payload),
             updated_at=_now(),
+            generated_by=GENERATED_BY,
         )
 
     async def review_building(self, *, bbl: str, bin_: str) -> DepartmentReview:
-        permits = await self._socrata.permits_by_bbl(bbl)
-        filings = await self._socrata.filings_by_bin(bin_) if bin_ else []
-        violations = await self._socrata.dob_violations_by_bin(bin_) if bin_ else []
-        active_violations = [v for v in violations if _is_active_dob_violation(v)]
-        if active_violations:
-            status = ReviewStatus.FAIL
-            summary = f"{len(active_violations)} active DOB violation(s) on BIN — must be resolved before approval."
-            citations = [_building_fail_citation()]
-        else:
-            status = ReviewStatus.PASS
-            summary = f"{len(permits)} permits on record; no active DOB violations on BIN."
-            citations = []
+        permits = await self._evidence.lookup_dob_permits(bbl, bin_)
+        violations = await self._evidence.lookup_dob_violations(bin_)
+        active = int((violations.get("facts") or {}).get("active_violation_count") or 0)
+        evidence = _evidence_items(permits) + _evidence_items(violations)
+        if active:
+            return DepartmentReview(
+                department=Department.BUILDING,
+                status=ReviewStatus.FAIL,
+                summary=f"{active} active DOB violation(s) on BIN — must be resolved before approval.",
+                findings=[f"Active DOB violations on BIN: {active}"],
+                evidence=evidence,
+                citations=[_cite("1 RCNY 101-07")],
+                updated_at=_now(),
+                generated_by=GENERATED_BY,
+            )
+        permit_count = int((permits.get("facts") or {}).get("permit_count") or 0)
         return DepartmentReview(
             department=Department.BUILDING,
-            status=status,
-            summary=summary,
-            findings=[
-                f"Permit rows on BBL: {len(permits)}",
-                f"Filing rows on BIN: {len(filings)}",
-                f"Active DOB violations on BIN: {len(active_violations)}",
-            ],
-            evidence=[
-                EvidenceItem(
-                    source="NYC Open Data",
-                    dataset_id=ds.PERMITS,
-                    label="permit_count",
-                    value=len(permits),
-                ),
-                EvidenceItem(
-                    source="NYC Open Data",
-                    dataset_id=ds.DOB_VIOLATIONS,
-                    label="active_violation_count",
-                    value=len(active_violations),
-                ),
-            ],
-            citations=citations,
+            status=ReviewStatus.PASS,
+            summary=f"{permit_count} permits on record; no active DOB violations on BIN.",
+            findings=[f"Permit rows on BBL: {permit_count}", f"Active DOB violations on BIN: {active}"],
+            evidence=evidence,
             updated_at=_now(),
+            generated_by=GENERATED_BY,
         )
 
     async def review_fire(self, *, bin_: str) -> DepartmentReview:
-        if not bin_:
+        payload = await self._evidence.lookup_fdny_violations(bin_)
+        facts = payload.get("facts") or {}
+        if not facts.get("bin_present"):
             return DepartmentReview(
                 department=Department.FIRE,
                 status=ReviewStatus.NEEDS_INFO,
                 summary="BIN required for FDNY violation lookup.",
+                evidence=_evidence_items(payload),
                 updated_at=_now(),
+                generated_by=GENERATED_BY,
             )
-        rows = await self._socrata.fdny_violations_by_bin(bin_)
-        open_rows = [row for row in rows if _is_open_fdny_violation(row)]
-        if open_rows:
-            status = ReviewStatus.FAIL
-            summary = f"{len(open_rows)} open FDNY violation record(s) on BIN."
-            citations = [_fire_fail_citation()]
-        else:
-            status = ReviewStatus.PASS
-            historical = len(rows)
-            summary = (
-                f"No open FDNY violations on BIN."
-                if historical == 0
-                else f"No open FDNY violations; {historical} historical record(s) on file."
+        open_count = int(facts.get("open_violation_count") or 0)
+        if open_count:
+            return DepartmentReview(
+                department=Department.FIRE,
+                status=ReviewStatus.FAIL,
+                summary=f"{open_count} open FDNY violation record(s) on BIN.",
+                findings=[f"Open FDNY violations: {open_count}"],
+                evidence=_evidence_items(payload),
+                citations=[_cite("FC 901.7")],
+                updated_at=_now(),
+                generated_by=GENERATED_BY,
             )
-            citations = []
         return DepartmentReview(
             department=Department.FIRE,
-            status=status,
-            summary=summary,
-            findings=[
-                f"FDNY records on BIN: {len(rows)}",
-                f"Open FDNY violations: {len(open_rows)}",
-            ],
-            evidence=[
-                EvidenceItem(
-                    source="NYC Open Data",
-                    dataset_id=ds.FDNY_VIOLATIONS,
-                    label="open_violation_count",
-                    value=len(open_rows),
-                )
-            ],
-            citations=citations,
+            status=ReviewStatus.PASS,
+            summary="No open FDNY violations on BIN.",
+            findings=[f"FDNY records on BIN: {facts.get('record_count')}"],
+            evidence=_evidence_items(payload),
             updated_at=_now(),
+            generated_by=GENERATED_BY,
         )
 
     async def review_housing(self, *, bin_: str) -> DepartmentReview:
-        if not bin_:
+        payload = await self._evidence.lookup_hpd_violations(bin_)
+        facts = payload.get("facts") or {}
+        if not facts.get("bin_present"):
             return DepartmentReview(
                 department=Department.HOUSING,
                 status=ReviewStatus.NEEDS_INFO,
                 summary="BIN required for HPD violation lookup.",
+                evidence=_evidence_items(payload),
                 updated_at=_now(),
+                generated_by=GENERATED_BY,
             )
-        rows = await self._socrata.hpd_violations_by_bin(bin_)
-        open_rows = [row for row in rows if _is_open_hpd_violation(row)]
-        class_a = [row for row in open_rows if str(row.get("class", "")).upper() == "A"]
+        class_a = int(facts.get("open_class_a_count") or 0)
+        open_rows = int(facts.get("open_hpd_violation_count") or 0)
         if class_a:
-            status = ReviewStatus.FAIL
-            summary = f"{len(class_a)} open Class A HPD violation(s) on BIN."
-            citations = [_housing_fail_citation()]
-        elif open_rows:
-            status = ReviewStatus.NEEDS_INFO
-            summary = f"{len(open_rows)} open HPD violation(s) — confirm correction before approval."
-            citations = []
-        else:
-            status = ReviewStatus.PASS
-            summary = "No open HPD violations on BIN."
-            citations = []
+            return DepartmentReview(
+                department=Department.HOUSING,
+                status=ReviewStatus.FAIL,
+                summary=f"{class_a} open Class A HPD violation(s) on BIN.",
+                findings=[f"Open HPD violations: {open_rows}"],
+                evidence=_evidence_items(payload),
+                citations=[_cite("HMC §27-2115")],
+                updated_at=_now(),
+                generated_by=GENERATED_BY,
+            )
+        if open_rows:
+            return DepartmentReview(
+                department=Department.HOUSING,
+                status=ReviewStatus.NEEDS_INFO,
+                summary=f"{open_rows} open HPD violation(s) — confirm correction before approval.",
+                findings=[f"Open HPD violations: {open_rows}"],
+                evidence=_evidence_items(payload),
+                updated_at=_now(),
+                generated_by=GENERATED_BY,
+            )
         return DepartmentReview(
             department=Department.HOUSING,
-            status=status,
-            summary=summary,
-            findings=[
-                f"HPD violation rows on BIN: {len(rows)}",
-                f"Open HPD violations: {len(open_rows)}",
-            ],
-            evidence=[
-                EvidenceItem(
-                    source="NYC Open Data",
-                    dataset_id=ds.HPD_VIOLATIONS,
-                    label="open_hpd_violation_count",
-                    value=len(open_rows),
-                )
-            ],
-            citations=citations,
+            status=ReviewStatus.PASS,
+            summary="No open HPD violations on BIN.",
+            evidence=_evidence_items(payload),
             updated_at=_now(),
+            generated_by=GENERATED_BY,
         )
 
     async def review_utilities(self, *, bbl: str, bin_: str) -> DepartmentReview:
-        pluto_rows = await self._socrata.pluto_by_bbl(bbl)
-        if not pluto_rows:
+        payload = await self._evidence.lookup_dep_ecb(bbl, bin_)
+        facts = payload.get("facts") or {}
+        if not facts.get("found"):
             return DepartmentReview(
                 department=Department.UTILITIES,
                 status=ReviewStatus.NEEDS_INFO,
-                summary="No PLUTO record found for DEP ECB lookup.",
+                summary=str(payload.get("note") or "DEP ECB lookup needs more parcel context."),
+                evidence=_evidence_items(payload),
                 updated_at=_now(),
+                generated_by=GENERATED_BY,
             )
-        lot = pluto_rows[0]
-        address = str(lot.get("address") or "")
-        borough_code = str(lot.get("borough") or "")
-        borough_name = BOROUGH_NAMES.get(borough_code.upper(), borough_code.upper())
-        house = _house_number(address)
-        if not house or not borough_name:
+        open_count = int(facts.get("open_dep_ecb_count") or 0)
+        address = facts.get("address") or bbl
+        if open_count:
             return DepartmentReview(
                 department=Department.UTILITIES,
-                status=ReviewStatus.NEEDS_INFO,
-                summary="Address and borough required for DEP ECB violation lookup.",
+                status=ReviewStatus.FAIL,
+                summary=f"{open_count} open DEP ECB violation records at {address}.",
+                findings=[f"Open or penalty-due records: {open_count}"],
+                evidence=_evidence_items(payload),
+                citations=[_cite("DEP Rules")],
                 updated_at=_now(),
-            )
-        rows = await self._socrata.dep_ecb_by_address(house=house, borough=borough_name)
-        open_rows = [
-            row
-            for row in rows
-            if str(row.get("compliance_status", "")).lower() not in {"dismissed", "paid in full"}
-        ]
-        status = ReviewStatus.PASS if len(open_rows) == 0 else ReviewStatus.FAIL
-        citations = []
-        if open_rows:
-            citations.append(
-                Citation(
-                    code="DEP Rules",
-                    excerpt="Open DEP ECB violations must be resolved before permit approval.",
-                    source_url=_citation_url(),
-                )
+                generated_by=GENERATED_BY,
             )
         return DepartmentReview(
             department=Department.UTILITIES,
-            status=status,
-            summary=f"{len(open_rows)} open DEP ECB violation records at {address}.",
-            findings=[
-                f"DEP ECB records for {address}, {borough_name}: {len(rows)} total",
-                f"Open or penalty-due records: {len(open_rows)}",
-            ],
-            evidence=[
-                EvidenceItem(
-                    source="NYC Open Data",
-                    dataset_id=ds.DEP_ECB,
-                    label="dep_ecb_record_count",
-                    value=len(rows),
-                ),
-                EvidenceItem(
-                    source="NYC Open Data",
-                    dataset_id=ds.DEP_ECB,
-                    label="open_dep_ecb_count",
-                    value=len(open_rows),
-                ),
-            ],
-            citations=citations,
+            status=ReviewStatus.PASS,
+            summary=f"0 open DEP ECB violation records at {address}.",
+            evidence=_evidence_items(payload),
             updated_at=_now(),
+            generated_by=GENERATED_BY,
         )
 
     async def review_landmarks(self, *, bbl: str, work_type: str) -> DepartmentReview:
-        rows = await self._socrata.landmarks_by_bbl(bbl)
-        pluto = await self._socrata.pluto_by_bbl(bbl)
-        histdist = pluto[0].get("histdist") if pluto else None
-        in_landmark = bool(rows) or bool(histdist)
-        demolition = "demolition" in work_type.lower()
+        payload = await self._evidence.lookup_landmarks(bbl, work_type)
+        facts = payload.get("facts") or {}
+        in_landmark = bool(facts.get("in_landmark_context"))
+        demolition = bool(facts.get("demolition"))
         if in_landmark and demolition:
-            status = ReviewStatus.FAIL
-            summary = "Property is in or adjacent to a landmark context; demolition requires LPC review."
-            citations = [
-                Citation(
-                    code="NYC LPC",
-                    excerpt="Work affecting landmark properties requires Landmarks Preservation Commission approval.",
-                    source_url=_citation_url(),
-                )
-            ]
-        elif in_landmark:
-            status = ReviewStatus.NEEDS_INFO
-            summary = "Landmark records present; confirm scope with LPC."
-            citations = []
-        else:
-            status = ReviewStatus.PASS
-            summary = "No LPC landmark records on this BBL."
-            citations = []
+            return DepartmentReview(
+                department=Department.LANDMARKS,
+                status=ReviewStatus.FAIL,
+                summary="Property is in or adjacent to a landmark context; demolition requires LPC review.",
+                findings=[f"LPC dataset rows: {facts.get('landmark_row_count')}", f"PLUTO histdist: {facts.get('histdist') or 'none'}"],
+                evidence=_evidence_items(payload),
+                citations=[_cite("NYC LPC")],
+                updated_at=_now(),
+                generated_by=GENERATED_BY,
+            )
+        if in_landmark:
+            return DepartmentReview(
+                department=Department.LANDMARKS,
+                status=ReviewStatus.NEEDS_INFO,
+                summary="Landmark records present; confirm scope with LPC.",
+                findings=[f"LPC dataset rows: {facts.get('landmark_row_count')}"],
+                evidence=_evidence_items(payload),
+                updated_at=_now(),
+                generated_by=GENERATED_BY,
+            )
         return DepartmentReview(
             department=Department.LANDMARKS,
-            status=status,
-            summary=summary,
-            findings=[
-                f"LPC dataset rows: {len(rows)}",
-                f"PLUTO histdist: {histdist or 'none'}",
-            ],
-            evidence=[
-                EvidenceItem(
-                    source="NYC Open Data",
-                    dataset_id=ds.LANDMARKS,
-                    label="landmark_row_count",
-                    value=len(rows),
-                )
-            ],
-            citations=citations,
+            status=ReviewStatus.PASS,
+            summary="No LPC landmark records on this BBL.",
+            findings=[f"LPC dataset rows: {facts.get('landmark_row_count')}"],
+            evidence=_evidence_items(payload),
             updated_at=_now(),
+            generated_by=GENERATED_BY,
         )
 
     async def review_critic(self, *, reviews: list[DepartmentReview]) -> DepartmentReview:
-        failures = [r for r in reviews if r.status == ReviewStatus.FAIL]
-        uncited_failures = [r for r in failures if not r.citations]
-        pass_without_evidence = [
-            r
-            for r in reviews
-            if r.department != Department.CRITIC
-            and r.status == ReviewStatus.PASS
-            and not r.evidence
-        ]
-        citation_mismatches: list[str] = []
-        unknown_codes: list[str] = []
-        for review in reviews:
-            if review.department == Department.CRITIC:
-                continue
-            for citation in review.citations:
-                code = citation.code.strip()
-                if not is_known_citation(code):
-                    unknown_codes.append(f"{review.department.value}: {code}")
-                elif not citation_valid_for_department(code, review.department):
-                    citation_mismatches.append(f"{review.department.value}: {code}")
+        return critic_policy(reviews, generated_by=GENERATED_BY)
 
-        policy_evidence = EvidenceItem(
-            source="Policy check",
-            dataset_id="policy/cite-or-reject",
-            label="policy_check",
-            value="cite-or-reject",
-        )
-
-        if uncited_failures:
-            depts = ", ".join(r.department.value for r in uncited_failures)
-            return DepartmentReview(
-                department=Department.CRITIC,
-                status=ReviewStatus.FAIL,
-                summary=f"Rejected {len(uncited_failures)} failure(s) without citations: {depts}.",
-                findings=[
-                    "Cite-or-reject policy: FAIL reviews must include ordinance citations.",
-                    f"Departments missing citations: {depts}",
-                ],
-                evidence=[policy_evidence],
-                citations=[
-                    Citation(
-                        code="NYC Admin Code §28-105",
-                        excerpt="Department determinations must reference applicable code sections.",
-                        source_url=_citation_url(),
-                    )
-                ],
-                updated_at=_now(),
-            )
-
-        if pass_without_evidence:
-            depts = ", ".join(r.department.value for r in pass_without_evidence)
-            return DepartmentReview(
-                department=Department.CRITIC,
-                status=ReviewStatus.FAIL,
-                summary=f"Rejected PASS without supporting evidence: {depts}.",
-                findings=[
-                    "PASS reviews must cite NYC Open Data evidence rows.",
-                    f"Departments with empty evidence: {depts}",
-                ],
-                evidence=[policy_evidence],
-                citations=[
-                    Citation(
-                        code="NYC Admin Code §28-105",
-                        excerpt="Department findings must be grounded in verifiable evidence.",
-                        source_url=_citation_url(),
-                    )
-                ],
-                updated_at=_now(),
-            )
-
-        if unknown_codes or citation_mismatches:
-            details = unknown_codes + citation_mismatches
-            return DepartmentReview(
-                department=Department.CRITIC,
-                status=ReviewStatus.FAIL,
-                summary="Rejected citation(s) that do not resolve in the ordinance index.",
-                findings=[
-                    "Citations must reference known NYC code sections relevant to the department.",
-                    *details,
-                ],
-                evidence=[policy_evidence],
-                citations=[
-                    Citation(
-                        code="NYC Admin Code §28-105",
-                        excerpt="Cited code sections must exist and match the reviewing department.",
-                        source_url=_citation_url(),
-                    )
-                ],
-                updated_at=_now(),
-            )
-
-        return DepartmentReview(
-            department=Department.CRITIC,
-            status=ReviewStatus.PASS,
-            summary="All failure findings include citations; evidence and codes validated.",
-            findings=[f"Reviewed {len(reviews)} department outputs."],
-            evidence=[policy_evidence],
-            updated_at=_now(),
-        )
+    async def review_named(
+        self,
+        department: Department,
+        *,
+        bbl: str,
+        bin_: str,
+        work_type: str,
+        existing: list[DepartmentReview] | None = None,
+    ) -> DepartmentReview:
+        if department == Department.ZONING:
+            return await self.review_zoning(bbl=bbl)
+        if department == Department.BUILDING:
+            return await self.review_building(bbl=bbl, bin_=bin_)
+        if department == Department.FIRE:
+            return await self.review_fire(bin_=bin_)
+        if department == Department.UTILITIES:
+            return await self.review_utilities(bbl=bbl, bin_=bin_)
+        if department == Department.LANDMARKS:
+            return await self.review_landmarks(bbl=bbl, work_type=work_type)
+        if department == Department.HOUSING:
+            return await self.review_housing(bin_=bin_)
+        if department == Department.CRITIC:
+            return await self.review_critic(reviews=existing or [])
+        raise ValueError(f"Unknown department: {department}")
 
     async def related_permits(self, *, bbl: str, bin_: str) -> list[dict]:
         permits = await self._socrata.permits_by_bbl(bbl)

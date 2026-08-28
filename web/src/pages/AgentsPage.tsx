@@ -8,7 +8,7 @@ export default function AgentsPage() {
       <PageHeader
         eyebrow="Agent Registry"
         title="Fleet"
-        subtitle="Department agents deployed on Agent Runtime with Agent Identity. Tools are the governed NYC Open Data MCP server."
+        subtitle="Department specialists on Agent Runtime. Test a signed invoke or send a tampered fingerprint — the allowlist returns 403, not a missing-admin error."
       />
       <Panel title="Registered agents" subtitle="Live catalog from Gemini Enterprise Agent Platform.">
         <AgentRegistry />

@@ -40,12 +40,14 @@
         <div class="pp-hero-copy pp-reveal">
           <div class="pp-eyebrow">
             <span class="pp-eyebrow-dot"></span>
-            NYC Department of Buildings · Clerk layer
+            NYC Department of Buildings · Clerk layer above DOB NOW
           </div>
-          <h1>One queue.<br />One case file.<br />Live city data.</h1>
+          <h1>Maria’s queue.<br />Seven agencies.<br />One case file.</h1>
           <p class="pp-hero-lead">
-            Permit Pilot orchestrates intake, department distribution, and clerk decisions for NYC building
-            permits — pulling real violation counts and parcel context from NYC Open Data on every run.
+            Maria is a Queens plan examiner. Fifty packets a week, seven agencies, no single inbox.
+            Permit Pilot is the clerk layer above DOB NOW — it does not replace it. A coordinator
+            writes a routing plan, delegates only the specialists who apply, and pauses for Maria
+            to send claims or record decisions.
           </p>
           <div class="pp-hero-actions">
             <a href="/login" class="pp-btn pp-btn-primary">Open clerk app</a>
@@ -75,7 +77,7 @@
                 <div class="pp-dept-row"><span class="pp-dept-name">Building</span><span class="pp-dept-meta">DOB</span><span class="pp-badge pp-badge--fail">Active violations</span></div>
                 <div class="pp-dept-row"><span class="pp-dept-name">Fire</span><span class="pp-dept-meta">FDNY</span><span class="pp-badge pp-badge--pass">Pass</span></div>
                 <div class="pp-dept-row"><span class="pp-dept-name">Utilities</span><span class="pp-dept-meta">DEP</span><span class="pp-badge pp-badge--info">ECB</span></div>
-                <div class="pp-dept-row"><span class="pp-dept-name">Landmarks</span><span class="pp-dept-meta">LPC</span><span class="pp-badge pp-badge--pass">Pass</span></div>
+                <div class="pp-dept-row"><span class="pp-dept-name">Landmarks</span><span class="pp-dept-meta">LPC</span><span class="pp-badge pp-badge--skip">Skipped — empty histdist</span></div>
                 <div class="pp-dept-row"><span class="pp-dept-name">Housing</span><span class="pp-dept-meta">HPD</span><span class="pp-badge pp-badge--pass">Pass</span></div>
                 <div class="pp-dept-row"><span class="pp-dept-name">Critic</span><span class="pp-dept-meta">Review</span><span class="pp-badge pp-badge--pass">Valid</span></div>
               </div>
@@ -89,8 +91,8 @@
       <div class="pp-trust-inner">
         <span><strong>NYC Open Data</strong> Socrata</span>
         <span><strong>9 datasets</strong> keyed on BBL / BIN</span>
-        <span><strong>7 agents</strong> + Critic</span>
-        <span><strong>Vertex</strong> gemini-2.5-flash briefing</span>
+        <span><strong>Coordinator</strong> + 6 specialists + critic</span>
+        <span><strong>Vertex</strong> gemini-3.5-flash</span>
         <span>Does <strong>not</strong> replace DOB NOW</span>
       </div>
     </div>

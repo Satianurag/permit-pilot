@@ -535,6 +535,73 @@ class FirestoreStore:
             }
         )
 
+    def _fleet_meta(self, case_id: str):
+        return self._cases().document(case_id).collection("meta").document("fleet")
+
+    def save_routing_plan(self, case_id: str, plan: dict[str, Any] | Any) -> None:
+        data = plan.model_dump(mode="json") if hasattr(plan, "model_dump") else dict(plan)
+        self._fleet_meta(case_id).set({"routing_plan": data, "updated_at": _serialize_dt(_now())}, merge=True)
+
+    def get_routing_plan(self, case_id: str) -> dict[str, Any] | None:
+        snap = self._fleet_meta(case_id).get()
+        if not snap.exists:
+            return None
+        plan = (snap.to_dict() or {}).get("routing_plan")
+        return plan if isinstance(plan, dict) else None
+
+    def save_completeness(self, case_id: str, scan: dict[str, Any] | Any) -> None:
+        data = scan.model_dump(mode="json") if hasattr(scan, "model_dump") else dict(scan)
+        self._fleet_meta(case_id).set({"completeness": data, "updated_at": _serialize_dt(_now())}, merge=True)
+
+    def get_completeness(self, case_id: str) -> dict[str, Any] | None:
+        snap = self._fleet_meta(case_id).get()
+        if not snap.exists:
+            return None
+        data = (snap.to_dict() or {}).get("completeness")
+        return data if isinstance(data, dict) else None
+
+    def set_interrupt(self, case_id: str, requested: bool) -> None:
+        self._fleet_meta(case_id).set(
+            {"interrupt_requested": requested, "updated_at": _serialize_dt(_now())},
+            merge=True,
+        )
+
+    def interrupt_requested(self, case_id: str) -> bool:
+        snap = self._fleet_meta(case_id).get()
+        if not snap.exists:
+            return False
+        return bool((snap.to_dict() or {}).get("interrupt_requested"))
+
+    def save_pending_hitl(self, case_id: str, pending: dict[str, Any] | None) -> None:
+        self._fleet_meta(case_id).set(
+            {"pending_hitl": pending, "updated_at": _serialize_dt(_now())},
+            merge=True,
+        )
+
+    def get_pending_hitl(self, case_id: str) -> dict[str, Any] | None:
+        snap = self._fleet_meta(case_id).get()
+        if not snap.exists:
+            return None
+        data = (snap.to_dict() or {}).get("pending_hitl")
+        return data if isinstance(data, dict) else None
+
+    def set_critic_iterations(self, case_id: str, count: int) -> None:
+        self._fleet_meta(case_id).set(
+            {"critic_iterations": count, "updated_at": _serialize_dt(_now())},
+            merge=True,
+        )
+
+    def get_critic_iterations(self, case_id: str) -> int:
+        snap = self._fleet_meta(case_id).get()
+        if not snap.exists:
+            return 0
+        return int((snap.to_dict() or {}).get("critic_iterations") or 0)
+
+    def fleet_state(self, case_id: str) -> dict[str, Any]:
+        snap = self._fleet_meta(case_id).get()
+        data = snap.to_dict() if snap.exists else {}
+        return data or {}
+
     def save_workflow_steps(self, case_id: str, steps: list[Any]) -> None:
         batch = self._db.batch()
         col = self._cases().document(case_id).collection("workflow")

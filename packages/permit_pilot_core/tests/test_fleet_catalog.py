@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import unittest
 
-from permit_pilot_core.platform.fleet import FLEET, fleet_by_name
+from permit_pilot_core.platform.fleet import FLEET, MCP_TOOL_CATALOG, fleet_by_name
 from permit_pilot_core.settings import get_settings
 
 
@@ -22,26 +22,22 @@ class FleetCatalogTest(unittest.TestCase):
         self.assertEqual(settings.vertex_location, "global")
 
     def test_tools_come_from_mcp_catalog(self) -> None:
-        allowed = {
-            "lookup_pluto",
-            "lookup_dob_permits",
-            "lookup_dob_violations",
-            "lookup_fdny_violations",
-            "lookup_hpd_violations",
-            "lookup_dep_ecb",
-            "lookup_landmarks",
-            "validate_citations",
-            "persist_review",
-        }
         for agent in FLEET:
             self.assertTrue(agent.tools, agent.name)
-            extra = set(agent.tools) - allowed
+            extra = set(agent.tools) - MCP_TOOL_CATALOG
             self.assertFalse(extra, extra)
 
     def test_zoning_cannot_reach_hpd(self) -> None:
         zoning = fleet_by_name()["zoning_agent"]
         self.assertNotIn("lookup_hpd_violations", zoning.tools)
         self.assertIn("lookup_pluto", zoning.tools)
+
+    def test_orchestrator_does_not_hold_every_lookup(self) -> None:
+        orch = fleet_by_name()["permit_orchestrator"]
+        self.assertNotIn("lookup_hpd_violations", orch.tools)
+        self.assertNotIn("persist_review", orch.tools)
+        self.assertIn("suggest_routing_plan", orch.tools)
+        self.assertIn("draft_claim", orch.tools)
 
     def test_housing_cannot_reach_pluto(self) -> None:
         housing = fleet_by_name()["housing_agent"]
@@ -50,7 +46,9 @@ class FleetCatalogTest(unittest.TestCase):
 
     def test_critic_is_grounded_in_validate_citations(self) -> None:
         critic = fleet_by_name()["critic_agent"]
-        self.assertEqual(set(critic.tools), {"validate_citations", "persist_review"})
+        self.assertIn("validate_citations", critic.tools)
+        self.assertIn("get_ordinance_section", critic.tools)
+        self.assertIn("persist_review", critic.tools)
 
 
 if __name__ == "__main__":

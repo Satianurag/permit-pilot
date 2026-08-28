@@ -9,7 +9,10 @@ from mcp.server.transport_security import TransportSecuritySettings
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-from permit_pilot_core.distribution.engine import DistributionEngine
+from permit_pilot_core.distribution.critic import review_critic
+from permit_pilot_core.distribution.evidence import EvidenceClient
+from permit_pilot_core.distribution.ordinance import get_section, search_ordinance
+from permit_pilot_core.distribution.routing import plan_departments
 from permit_pilot_core.firestore.store import FirestoreStore
 from permit_pilot_core.models import Citation, Department, DepartmentReview, EvidenceItem, ReviewStatus
 from permit_pilot_core.settings import get_settings
@@ -17,9 +20,9 @@ from permit_pilot_core.settings import get_settings
 mcp = MCPServer(
     name="permit-tools",
     title="Permit Pilot NYC tools",
-    description="Governed NYC Open Data tools for the Permit Pilot agent fleet.",
+    description="Governed NYC Open Data and ordinance tools for the Permit Pilot agent fleet.",
 )
-_engine = DistributionEngine()
+_evidence = EvidenceClient()
 
 
 def _store() -> FirestoreStore:
@@ -30,81 +33,116 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
-def _dump(review: DepartmentReview) -> dict[str, Any]:
-    return json.loads(review.model_dump_json())
-
-
 @mcp.tool()
 async def lookup_pluto(bbl: str, case_id: str = "") -> dict[str, Any]:
-    """Fetch DCP PLUTO zoning facts for a NYC BBL and optionally persist a zoning review."""
-    review = await _engine.review_zoning(bbl=bbl)
-    if case_id:
-        _merge_review(case_id, review)
-    return _dump(review)
+    """Fetch raw DCP PLUTO zoning facts for a NYC BBL. Does not decide PASS/FAIL."""
+    payload = await _evidence.lookup_pluto(bbl)
+    payload["case_id"] = case_id
+    return payload
 
 
 @mcp.tool()
 async def lookup_dob_permits(bbl: str, bin: str = "", case_id: str = "") -> dict[str, Any]:
-    """Fetch DOB NOW permits and violations for a BBL/BIN."""
-    review = await _engine.review_building(bbl=bbl, bin_=bin)
-    if case_id:
-        _merge_review(case_id, review)
-    return _dump(review)
+    """Fetch raw DOB NOW permit and filing rows. Does not decide PASS/FAIL."""
+    payload = await _evidence.lookup_dob_permits(bbl, bin)
+    payload["case_id"] = case_id
+    return payload
 
 
 @mcp.tool()
 async def lookup_dob_violations(bin: str, bbl: str = "", case_id: str = "") -> dict[str, Any]:
-    """Fetch active DOB violations for a BIN."""
-    review = await _engine.review_building(bbl=bbl, bin_=bin)
-    if case_id:
-        _merge_review(case_id, review)
-    return _dump(review)
+    """Fetch raw DOB violation rows and active_violation_count. Does not decide PASS/FAIL."""
+    payload = await _evidence.lookup_dob_violations(bin)
+    payload["bbl"] = bbl
+    payload["case_id"] = case_id
+    return payload
 
 
 @mcp.tool()
 async def lookup_fdny_violations(bin: str, case_id: str = "") -> dict[str, Any]:
-    """Fetch FDNY violation records for a BIN."""
-    review = await _engine.review_fire(bin_=bin)
-    if case_id:
-        _merge_review(case_id, review)
-    return _dump(review)
+    """Fetch raw FDNY violation rows and open_violation_count. Does not decide PASS/FAIL."""
+    payload = await _evidence.lookup_fdny_violations(bin)
+    payload["case_id"] = case_id
+    return payload
 
 
 @mcp.tool()
 async def lookup_hpd_violations(bin: str, case_id: str = "") -> dict[str, Any]:
-    """Fetch HPD violation records for a BIN."""
-    review = await _engine.review_housing(bin_=bin)
-    if case_id:
-        _merge_review(case_id, review)
-    return _dump(review)
+    """Fetch raw HPD violation rows and class counts. Does not decide PASS/FAIL."""
+    payload = await _evidence.lookup_hpd_violations(bin)
+    payload["case_id"] = case_id
+    return payload
 
 
 @mcp.tool()
 async def lookup_dep_ecb(bbl: str, bin: str = "", case_id: str = "") -> dict[str, Any]:
-    """Fetch DEP ECB violation records for a parcel."""
-    review = await _engine.review_utilities(bbl=bbl, bin_=bin)
-    if case_id:
-        _merge_review(case_id, review)
-    return _dump(review)
+    """Fetch raw DEP ECB rows and open_dep_ecb_count. Does not decide PASS/FAIL."""
+    payload = await _evidence.lookup_dep_ecb(bbl, bin)
+    payload["case_id"] = case_id
+    return payload
 
 
 @mcp.tool()
 async def lookup_landmarks(bbl: str, work_type: str = "", case_id: str = "") -> dict[str, Any]:
-    """Fetch LPC landmark records for a BBL."""
-    review = await _engine.review_landmarks(bbl=bbl, work_type=work_type)
+    """Fetch raw LPC landmark rows and historic-district facts. Does not decide PASS/FAIL."""
+    payload = await _evidence.lookup_landmarks(bbl, work_type)
+    payload["case_id"] = case_id
+    return payload
+
+
+@mcp.tool()
+async def search_ordinance_corpus(query: str, corpus: str = "all", limit: int = 10) -> dict[str, Any]:
+    """Search NYC Charter / Admin Code / Rules (BetaNYC-shaped corpus)."""
+    return {"query": query, "results": search_ordinance(query, corpus=corpus, limit=limit)}
+
+
+@mcp.tool()
+async def get_ordinance_section(citation: str, corpus: str = "all") -> dict[str, Any]:
+    """Retrieve a NYC ordinance section by citation. Critic must call this before accepting a code."""
+    return get_section(citation, corpus=corpus)
+
+
+@mcp.tool()
+async def persist_routing_plan(
+    case_id: str,
+    departments_json: str,
+    skipped_json: str = "{}",
+    reason: str = "technical_review",
+) -> dict[str, Any]:
+    """Persist the coordinator routing plan onto the case file."""
+    departments = json.loads(departments_json) if departments_json else []
+    skipped = json.loads(skipped_json) if skipped_json else {}
+    plan = {
+        "departments": departments,
+        "skipped": skipped,
+        "include_critic": bool(departments),
+        "reason": reason,
+        "generated_by": "permit_orchestrator",
+    }
+    store = _store()
+    store.save_routing_plan(case_id, plan)
+    store.append_audit(case_id, actor="permit_orchestrator", action="routing_plan", detail=json.dumps(plan)[:500])
+    return plan
+
+
+@mcp.tool()
+async def suggest_routing_plan(bbl: str, bin: str, work_type: str, case_id: str = "") -> dict[str, Any]:
+    """Compute a routing plan from live PLUTO + work type. Coordinator should persist it."""
+    pluto = await _evidence.lookup_pluto(bbl)
+    plan = plan_departments(work_type=work_type, bin_=bin, pluto=pluto, complete_enough=True)
     if case_id:
-        _merge_review(case_id, review)
-    return _dump(review)
+        _store().save_routing_plan(case_id, {**plan, "generated_by": "permit_orchestrator"})
+    return plan
 
 
 @mcp.tool()
 async def validate_citations(case_id: str) -> dict[str, Any]:
-    """Run the deterministic cite-or-reject critic against persisted department reviews."""
+    """Run cite-or-reject against persisted department reviews. Does not invent codes."""
     store = _store()
     reviews = [r for r in store.list_distribution(case_id) if r.department != Department.CRITIC]
-    critic = await _engine.review_critic(reviews=reviews)
+    critic = review_critic(reviews)
     _merge_review(case_id, critic)
-    return _dump(critic)
+    return json.loads(critic.model_dump_json())
 
 
 @mcp.tool()
@@ -116,6 +154,7 @@ async def persist_review(
     findings_json: str = "[]",
     evidence_json: str = "[]",
     citations_json: str = "[]",
+    generated_by: str = "",
 ) -> dict[str, Any]:
     """Persist a department review onto the case file in Firestore."""
     findings = json.loads(findings_json) if findings_json else []
@@ -129,9 +168,34 @@ async def persist_review(
         evidence=[EvidenceItem.model_validate(item) for item in evidence_raw],
         citations=[Citation.model_validate(item) for item in citations_raw],
         updated_at=_now(),
+        generated_by=generated_by or department,
+        model=get_settings().vertex_model,
     )
     _merge_review(case_id, review)
-    return _dump(review)
+    return json.loads(review.model_dump_json())
+
+
+@mcp.tool()
+async def draft_claim(case_id: str, message: str) -> dict[str, Any]:
+    """Draft an applicant claim. Does not send. Clerk confirmation is required."""
+    store = _store()
+    store.save_pending_hitl(case_id, {"kind": "send_claim", "payload": {"message": message}, "confirmed": False})
+    store.append_audit(case_id, actor="completeness_agent", action="claim_drafted", detail=message[:300])
+    return {"queued": True, "kind": "send_claim", "message": message, "confirmed": False}
+
+
+@mcp.tool()
+async def draft_decision(case_id: str, decision: str, note: str, override: bool = False) -> dict[str, Any]:
+    """Draft a clerk decision. Does not approve. Clerk confirmation is required."""
+    store = _store()
+    pending = {
+        "kind": "record_decision",
+        "payload": {"decision": decision, "note": note, "override": override},
+        "confirmed": False,
+    }
+    store.save_pending_hitl(case_id, pending)
+    store.append_audit(case_id, actor="permit_orchestrator", action="decision_drafted", detail=f"{decision}: {note[:200]}")
+    return {**pending, "queued": True}
 
 
 @mcp.custom_route("/health", methods=["GET"])
@@ -153,7 +217,6 @@ def _merge_review(case_id: str, review: DepartmentReview) -> None:
 
 
 def _transport_security() -> TransportSecuritySettings:
-    # Cloud Run already validates Host. Locally keep DNS-rebinding protection.
     settings = get_settings()
     if settings.running_on_cloud_run:
         return TransportSecuritySettings(enable_dns_rebinding_protection=False)

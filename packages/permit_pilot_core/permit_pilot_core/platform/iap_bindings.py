@@ -50,10 +50,7 @@ def endpoint_egressor_bindings(*, principals: dict[str, str]) -> list[dict]:
     """Socrata endpoint access for agents that query NYC Open Data tools."""
     members: list[str] = []
     for spec in FLEET:
-        if "validate_citations" in spec.tools and set(spec.tools) <= {
-            "validate_citations",
-            "persist_review",
-        }:
+        if not any(tool.startswith("lookup_") for tool in spec.tools):
             continue
         principal = principals.get(spec.name)
         if not principal:

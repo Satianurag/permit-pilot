@@ -5,6 +5,8 @@ const styles: Record<string, string> = {
   fail: "bg-red-50 text-red-900 border-red-200",
   checking: "bg-amber-50 text-amber-900 border-amber-200",
   needs_info: "bg-slate-100 text-slate-800 border-slate-200",
+  skipped: "bg-slate-50 text-slate-700 border-slate-200",
+  interrupted: "bg-amber-50 text-amber-900 border-amber-200",
   in_review: "bg-blue-50 text-blue-900 border-blue-200",
   awaiting_clerk: "bg-violet-50 text-violet-900 border-violet-200",
   awaiting_applicant: "bg-amber-50 text-amber-900 border-amber-200",

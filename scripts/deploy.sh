@@ -64,8 +64,8 @@ gcloud run deploy "$SERVICE" \
   --port 8080 \
   --memory 1Gi \
   --cpu 1 \
-  --max-instances 4 \
-  --min-instances 0 \
+  --max-instances 10 \
+  --min-instances 1 \
   --timeout 300 \
   --env-vars-file "$ENV_FILE" \
   --set-secrets "AUTH_SECRET_KEY=permit-pilot-auth-secret:latest,CLERK_BOOTSTRAP_PASSWORD=permit-pilot-clerk-password:latest"

@@ -1,8 +1,10 @@
 # Permit Pilot
 
-**NYC building-permit clerk orchestration** on the Gemini Enterprise Agent Platform. Department agents review live NYC Open Data through a governed MCP server; a human clerk decides.
+**NYC building-permit clerk orchestration** on the Gemini Enterprise Agent Platform. A coordinator writes a routing plan, delegates to department specialists over A2A, and pauses for a human clerk. Agents never approve a permit and never notify the applicant.
 
 Built for the [All Things Agentic Hackathon](https://allthingsagentichackathon.devpost.com/) — **Fortified Enterprise Fleet** track.
+
+Maria is a Queens plan examiner. Fifty packets a week, seven agencies, no single inbox. Permit Pilot is the clerk layer **above DOB NOW** — it does not replace it.
 
 | Live service | URL |
 |--------------|-----|
@@ -17,46 +19,44 @@ Built for the [All Things Agentic Hackathon](https://allthingsagentichackathon.d
 
 ```mermaid
 flowchart TB
-  UI["Clerk UI: React 19, Tailwind 4, Radix, TanStack Query"]
-  CP["Control plane: FastAPI on Cloud Run"]
-  FS["Firestore"]
-  CT["Cloud Tasks"]
-  MA1["Model Armor inline"]
-  AR["Agent Runtime: 8 ADK agents with Agent Identity"]
-  MB["Memory Bank scoped by BBL"]
-  AGW["Agent Gateway AGENT_TO_ANYWHERE"]
-  IAP["IAP per-tool egress"]
-  REG["Agent Registry"]
-  MCP["Permit Tools MCP / NYC Open Data"]
-
-  UI --> CP
-  CP --> FS
-  CP --> CT
-  CP --> MA1
-  CT --> AR
-  AR --> MB
-  AR -->|"all egress"| AGW
-  AGW --> IAP
-  AGW --> REG
-  REG --> MCP
+  UI["Clerk UI"] --> API["Cloud Run API"]
+  API --> CT["Cloud Tasks"]
+  CT --> Coord["permit_orchestrator Coordinator LlmAgent"]
+  Coord --> Mem["PreloadMemoryTool / Memory Bank BBL"]
+  Coord --> Gemma["Gemma packet completeness"]
+  Gemma -->|incomplete| HitlClaim["draft_claim HITL"]
+  Gemma -->|complete| Plan["routing_plan"]
+  Plan --> A2A["RemoteA2aAgent specialists"]
+  A2A --> MCP["MCP raw NYC Open Data"]
+  A2A --> Loop["LoopAgent critic max 3"]
+  Loop -->|FAIL| A2A
+  Loop --> Hitl["draft_claim / draft_decision HITL"]
+  Hitl --> Mem
+  GW["Agent Gateway fingerprint allowlist"] --> Coord
 ```
 
-The control plane does not run department agents inline. Intake, refresh, claim resume, and “Run fleet” enqueue Cloud Tasks. Eventarc wakes a case when an applicant claim is updated weeks later.
+Hot path: intake, refresh, fleet run, and Eventarc claim resume all **enqueue Cloud Tasks**. The worker calls `run_distribution`, which scans completeness, persists a routing plan, then `stream_query` on the orchestrator. If A2A is down, selected department engines run in parallel. Last resort is `DistributionEngine` labeled `generated_by=engine_fallback`.
+
+MCP `lookup_*` tools return raw Socrata rows and counts. They do **not** decide PASS/FAIL. `persist_review` is the only verdict write. The critic retrieves ordinance text via `get_ordinance_section` (BetaNYC-shaped corpus).
 
 ---
 
-## What it does
-
-Maria (NYC plan examiner) uses the clerk UI:
+## What Maria sees
 
 1. **My Tasks** — daily inbox with a 5-day review clock
-2. **Case file** — Summary, Distribution, Documents, Claims, Audit
-3. **Department fleet** — Zoning, Building, Fire, Utilities, Landmarks, Housing, Critic, Orchestrator
-4. **Governance** — Agent Gateway, Model Armor inspect, SPIFFE identities
+2. **Case file** — Summary, Distribution (routing plan + completeness pause + crash/resume), Documents, Claims, Audit
+3. **Fleet** — eight Agent Runtime engines with SPIFFE identities; **Test gateway** vs **Send tampered request**
+4. **Governance** — Agent Gateway, Model Armor inspect
 5. **Parcel memory** — Memory Bank facts keyed to a BBL
-6. **Clerk decides** — Approve or request changes with a required audit note
+6. **HITL** — agents draft claims and decisions; Maria confirms before anything is sent or recorded
 
-Reference BBLs live in `packages/permit_pilot_core/permit_pilot_core/seeds.py` (761 Macon Street is `3014930048`, PLUTO zone **R5B**, dataset `64uk-42ks`).
+Reference BBLs in `packages/permit_pilot_core/permit_pilot_core/seeds.py`:
+
+| Address | BBL | Notes |
+|---------|-----|--------|
+| 43-30 Parsons Boulevard, Queens | `4051980021` | Demolition; building FAIL on active DOB violations |
+| 112-08 178 Street, Queens | `4103000034` | Often missing BIN — completeness checklist, not objections |
+| 761 Macon Street, Brooklyn | `3014930048` | Plumbing, PLUTO **R5B**, empty `histdist` — skip LPC |
 
 ---
 
@@ -64,14 +64,18 @@ Reference BBLs live in `packages/permit_pilot_core/permit_pilot_core/seeds.py` (
 
 | Capability | Implementation |
 |------------|----------------|
-| Identity | Agent Runtime `identity_type=AGENT_IDENTITY` — SPIFFE trust domain `agents.global.proj-{NUM}.system.id.goog` |
-| Egress | Agent Gateway `permit-pilot-egress` in `AGENT_TO_ANYWHERE` mode |
-| Least privilege | IAP `roles/iap.egressor` per agent; zoning cannot call HPD |
-| Guardrails | Model Armor template `permit-pilot-armor` (inline + gateway extension) |
-| Tools | Permit Tools MCP on Cloud Run, registered in Agent Registry |
-| Async | Cloud Tasks queue `permit-pilot-distribution` + Eventarc on Firestore claims |
-| Memory | Memory Bank scoped `{"bbl": "..."}` |
-| Observability | OpenTelemetry → Cloud Trace; in-app run history on Traces; Vertex Agent Observability for LLM/tool DAG |
+| Intelligent delegation | Coordinator writes a visible routing plan; plumbing + empty `histdist` skips LPC |
+| A2A fleet | `RemoteA2aAgent` specialists on Agent Runtime; in-process specialists if cards fail |
+| Completeness | Gemma 3 packet scan + identifier gate; incomplete → checklist claim, no Fire/HPD |
+| Critic loop | `LoopAgent` max 3; FAIL re-routes to the named department; ordinance `get_section` |
+| HITL | `draft_claim` / `draft_decision` pause until Maria confirms |
+| Identity | Agent Runtime `AGENT_IDENTITY` — SPIFFE `agents.global.proj-{NUM}.system.id.goog` |
+| Egress | Agent Gateway `permit-pilot-egress`; invoke fingerprint allowlist (HMAC, not admin role) |
+| Tools | Permit Tools MCP; zoning cannot call HPD |
+| Guardrails | Model Armor `permit-pilot-armor` |
+| Async | Cloud Tasks `permit-pilot-distribution` + Eventarc on Firestore claims |
+| Memory | Memory Bank scoped `{"bbl": "..."}`; `PreloadMemoryTool` on the coordinator |
+| Observability | OpenTelemetry → Cloud Trace; in-app Traces; Vertex Agent Observability for A2A hops |
 
 ---
 
@@ -79,17 +83,18 @@ Reference BBLs live in `packages/permit_pilot_core/permit_pilot_core/seeds.py` (
 
 ```
 permit-pilot/
-  packages/permit_pilot_core/   # models, Socrata, Firestore, MCP-backed distribution, settings
+  packages/permit_pilot_core/   # models, evidence, routing, critic, fleet_runner, settings
   services/api/                 # FastAPI control plane
-  services/mcp-tools/           # Governed NYC Open Data MCP server
-  services/orchestrator/        # 8 ADK agents
+  services/mcp-tools/           # Raw NYC Open Data + ordinance MCP server
+  services/orchestrator/        # 8 ADK agents (coordinator + specialists)
   web/                          # React 19 + Vite + Tailwind 4
   scripts/
     deploy.sh                   # Combined UI + API Cloud Run
     deploy-fleet.py             # Agent Runtime fleet
     bind-agent-gateway.py       # Rebind engines to the gateway
     bind-agent-identity.sh      # IAP least-privilege CEL
-    audit.sh                    # Production proof (gateway, Armor, memory, resume)
+    audit.sh                    # Production proof
+    eval.sh                     # Golden BBL / tool-trajectory eval
     provision-platform.sh       # Gateway, IAP, Eventarc (do not re-run casually)
 ```
 
@@ -111,7 +116,7 @@ export VERTEX_MODEL=gemini-3.5-flash
 ./scripts/dev.sh web
 ```
 
-`.cloud-deploy.env` is gitignored. Clerk password lives in Secret Manager `permit-pilot-clerk-password`.
+`.cloud-deploy.env` is gitignored. Clerk password lives in Secret Manager `permit-pilot-clerk-password`. Bootstrap clerk is `maria`.
 
 ---
 
@@ -121,7 +126,7 @@ export VERTEX_MODEL=gemini-3.5-flash
 set -a && source .cloud-deploy.env && set +a
 export VERTEX_LOCATION=global VERTEX_MODEL=gemini-3.5-flash
 ./scripts/deploy.sh
-python3 scripts/deploy-fleet.py
+.venv/bin/python scripts/deploy-fleet.py   # or DEPLOY_ONLY=permit_orchestrator
 python3 scripts/bind-agent-gateway.py
 PERMIT_PILOT_URL="$(gcloud run services describe permit-pilot --region=us-central1 --format='value(status.url)')" \
   ./scripts/audit.sh
@@ -136,39 +141,45 @@ All routes are under `/api`:
 | Route | Purpose |
 |-------|---------|
 | `POST /cases/intake` | New case; enqueue Cloud Tasks fleet |
-| `GET /cases/{id}/bundle` | Case + distribution + claims + audit + traces |
-| `POST /cases/{id}/fleet/run` | Enqueue Agent Runtime distribution |
-| `POST /cases/{id}/distribution/refresh` | Enqueue a live NYC Open Data refresh |
-| `POST /cases/{id}/orchestrate` | Vertex Gemini clerk briefing |
-| `GET /agents` | Fleet cards with SPIFFE IDs |
+| `GET /cases/{id}/bundle` | Case + routing plan + completeness + HITL + traces |
+| `POST /cases/{id}/fleet/run` | Enqueue coordinator distribution |
+| `POST /cases/{id}/distribution/refresh` | Same enqueue (live NYC Open Data) |
+| `POST /cases/{id}/distribution/interrupt` | Authenticated crash flag (checked before each A2A hop) |
+| `POST /cases/{id}/distribution/resume` | Clear flag; skip completed specialists |
+| `POST /cases/{id}/hitl/confirm` | Clerk confirms a drafted claim or decision |
+| `POST /cases/{id}/orchestrate` | Briefing from persisted reviews (orchestrator, Vertex fallback) |
+| `GET /agents` | Fleet cards with SPIFFE + invoke fingerprint |
+| `POST /agents/{name}/invoke` | Signed fingerprint → Agent Runtime; tampered → 403 allowlist |
 | `GET /governance` | Gateway, Armor, registry, console links |
 | `GET /memory/{bbl}` | Memory Bank retrieve by parcel |
-| `POST /armor/inspect` | Model Armor on clerk-supplied text |
 | `POST /api/internal/distribution/run` | Cloud Tasks worker (OIDC) |
-| `POST /api/internal/eventarc/claims` | Eventarc claim resume |
+| `POST /api/internal/eventarc/claims` | Eventarc claim resume + Memory Bank fact |
 
 ---
 
-## Demo beats (repeatable)
+## Demo beats (4-minute live video)
 
-1. Sign in as Maria. Open **Fleet** — eight engines with SPIFFE `proj-` principals.
-2. **Governance** — paste a jailbreak; Model Armor returns **Blocked**.
-3. **Parcel memory** — BBL `3014930048` retrieves Memory Bank facts.
-4. Intake or **Run Agent Runtime fleet** on a case — Cloud Tasks 200, distribution fills from NYC Open Data.
-5. Open a department row — evidence cites live dataset IDs (`64uk-42ks`, `skr7-cxt3`, …).
-6. **Traces** — in-app run history with nested department spans; open Agent Observability for orchestrator LLM/tool DAG.
-7. Optional: revoke zoning’s IAP binding and re-run fleet — `lookup_pluto` is denied at the gateway.
+| t | Beat |
+|---|---|
+| 0:00–0:20 | Maria + live Cloud Run `.run.app` |
+| 0:20–0:45 | Fleet: signed A2A pass, tampered fingerprint 403 |
+| 0:45–1:15 | Intake with SSN → redacted + Gemma incomplete (no BIN) → checklist drafted, departments not started |
+| 1:15–1:35 | Complete packet → **routing plan** visible (Macon plumbing skips LPC) |
+| 1:35–2:20 | Parallel department chips; Simulate crash; Resume skips completed |
+| 2:20–2:50 | Critic FAIL → department re-run with citation (loop) |
+| 2:50–3:20 | HITL approve; Memory Bank fact on BBL; Observability A2A hops |
+| 3:20–3:50 | Next task; Eventarc “weeks later” claim resume |
+| 3:50–4:00 | GEAP one-liner: coordinator + A2A + Memory Bank + Gateway |
 
 ---
 
 ## Evaluation
 
 ```bash
-cd packages/permit_pilot_core
-python -m unittest tests.test_eval_bbls tests.test_parcel tests.test_identity tests.test_fleet_catalog
+./scripts/eval.sh
 ```
 
-Golden set: 761 Macon Street (`3014930048`) must resolve PLUTO zone **R5B**. Critic must FAIL an uncited department failure.
+Golden set: Macon Street (`3014930048`) PLUTO **R5B** and skip LPC. Parsons building tool trajectory includes `lookup_dob_violations` then `persist_review`. 178 Street routing includes landmarks when complete. Critic FAILs uncited failures and evidence/status contradictions. Eval set: `packages/permit_pilot_core/eval/permit_pilot.evalset.json`.
 
 ---
 

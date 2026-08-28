@@ -1,29 +1,9 @@
-"""Known NYC ordinance citations used by department reviews and the Critic policy check."""
+"""Backward-compatible hint list. Canonical lookup is distribution.ordinance."""
 
-from permit_pilot_core.models import Department
+from permit_pilot_core.distribution.ordinance import (
+    ORDINANCE_HINTS as ORDINANCE_INDEX,
+    citation_resolves as is_known_citation,
+    citation_valid_for_department,
+)
 
-# code -> departments that may cite it
-ORDINANCE_INDEX: dict[str, set[Department]] = {
-    "1 RCNY 101-07": {Department.BUILDING},
-    "FC 901.7": {Department.FIRE},
-    "HMC §27-2115": {Department.HOUSING},
-    "DEP Rules": {Department.UTILITIES},
-    "LPC Rule 2-01": {Department.LANDMARKS},
-    "NYC LPC": {Department.LANDMARKS},
-    "BC 3301": {Department.BUILDING},
-    "BC 28-104": {Department.BUILDING},
-    "BC 28-105": {Department.BUILDING},
-    "AC 28-105.12": {Department.BUILDING},
-    "NYC Admin Code §28-105": {Department.CRITIC, Department.BUILDING},
-}
-
-
-def citation_valid_for_department(code: str, department: Department) -> bool:
-    allowed = ORDINANCE_INDEX.get(code.strip())
-    if not allowed:
-        return False
-    return department in allowed
-
-
-def is_known_citation(code: str) -> bool:
-    return code.strip() in ORDINANCE_INDEX
+__all__ = ["ORDINANCE_INDEX", "citation_valid_for_department", "is_known_citation"]

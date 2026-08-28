@@ -434,6 +434,7 @@ button { font: inherit; cursor: pointer; border: none; background: none; }
 .pp-badge--fail { background: #fee2e2; color: #b91c1c; }
 .pp-badge--info { background: #fef3c7; color: #b45309; }
 .pp-badge--open { background: #dbeafe; color: #1d4ed8; }
+.pp-badge--skip { background: #f1f5f9; color: #475569; }
 
 .pp-dept-meta { color: #94a3b8; font-size: 0.55rem; font-family: var(--ui); font-weight: 500; }
 

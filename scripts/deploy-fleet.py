@@ -95,6 +95,15 @@ def _write_env_keys(mapping: dict[str, str]) -> None:
 
 def main() -> None:
     settings = get_settings()
+    if not settings.project_number:
+        number = subprocess.check_output(
+            ["gcloud", "projects", "describe", settings.project_id, "--format=value(projectNumber)"],
+            text=True,
+        ).strip()
+        if number:
+            os.environ["GOOGLE_CLOUD_PROJECT_NUMBER"] = number
+            get_settings.cache_clear()
+            settings = get_settings()
     mcp_url = os.environ.get("MCP_TOOLS_URL") or settings.mcp_tools_url
     if not mcp_url:
         raise SystemExit("MCP_TOOLS_URL is required")
@@ -123,7 +132,8 @@ def main() -> None:
         extra_packages = [path.name for path in wheels]
         requirements = extra_packages + [
             "google-cloud-aiplatform[adk,agent_engines]",
-            "google-adk",
+            "google-adk[a2a]",
+            "a2a-sdk[http-server]>=0.3.4,<2",
             "cloudpickle",
             "mcp>=1.9,<2",
             "pydantic-settings",
@@ -133,6 +143,17 @@ def main() -> None:
         ]
 
         mapping: dict[str, str] = {}
+        engines_seed = ROOT / ".agent-engines.json"
+        if engines_seed.exists():
+            try:
+                mapping.update(json.loads(engines_seed.read_text()) or {})
+            except json.JSONDecodeError:
+                pass
+        fleet_names = {agent.name for agent in FLEET}
+        for spec_name, resource in existing.items():
+            if spec_name in fleet_names:
+                mapping.setdefault(spec_name, str(resource).rsplit("/", 1)[-1])
+        mapping = {name: engine_id for name, engine_id in mapping.items() if name in fleet_names}
         identities: dict[str, dict[str, str]] = {}
         failures: list[str] = []
         only = os.environ.get("DEPLOY_ONLY", "").strip()
@@ -162,6 +183,10 @@ def main() -> None:
         }
 
         for spec in fleet:
+            if mapping:
+                env_vars["AGENT_ENGINE_IDS"] = ",".join(f"{k}={v}" for k, v in mapping.items())
+            for name, engine_id in mapping.items():
+                env_vars[f"{name.upper()}_ENGINE_ID"] = engine_id
             print(f"Deploying {spec.name}...", flush=True)
             module_name = MODULE_BY_AGENT.get(
                 spec.name, spec.name.replace("_agent", "")
@@ -172,6 +197,29 @@ def main() -> None:
             mod = importlib.import_module(f"permit_pilot.agents.{module_name}.agent")
             local_agent = mod.root_agent
             adk_app = wrap_for_runtime(local_agent)
+            try:
+                import cloudpickle
+
+                cloudpickle.dumps(adk_app)
+            except Exception as exc:  # noqa: BLE001
+                if spec.name == "permit_orchestrator" and not os.environ.get(
+                    "PERMIT_PILOT_INPROCESS_SPECIALISTS"
+                ):
+                    print(
+                        f"  RemoteA2aAgent pickle failed ({exc}); "
+                        "rebuilding coordinator with in-process specialists",
+                        flush=True,
+                    )
+                    os.environ["PERMIT_PILOT_INPROCESS_SPECIALISTS"] = "1"
+                    importlib.invalidate_caches()
+                    import permit_pilot.agents._factory as factory_mod
+                    importlib.reload(factory_mod)
+                    import permit_pilot.agents.orchestrator.agent as orch_mod
+                    importlib.reload(orch_mod)
+                    local_agent = orch_mod.root_agent
+                    adk_app = wrap_for_runtime(local_agent)
+                else:
+                    raise
             config = {
                 "display_name": spec.name,
                 "description": spec.description,

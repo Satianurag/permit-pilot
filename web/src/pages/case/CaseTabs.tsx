@@ -162,6 +162,10 @@ export function DistributionTab({
   distributionStale,
   onRefresh,
   onFleet,
+  onInterrupt,
+  onResume,
+  onConfirmHitl,
+  onRejectHitl,
   onSelect,
 }: {
   tabsId: string;
@@ -174,18 +178,92 @@ export function DistributionTab({
   distributionStale: boolean;
   onRefresh: () => void;
   onFleet: () => void;
+  onInterrupt: () => void;
+  onResume: () => void;
+  onConfirmHitl: () => void;
+  onRejectHitl: () => void;
   onSelect: (row: DepartmentReview) => void;
 }) {
+  const plan = bundle.routing_plan;
+  const completeness = bundle.completeness;
+  const pending = bundle.pending_hitl;
   return (
     <div role="tabpanel" id={`${tabsId}-panel-distribution`} aria-labelledby={`${tabsId}-distribution`} className="space-y-3">
-      {bundle.workflow.length > 0 && (
-        <div className="bg-slate-50 border border-pp-border rounded-xl p-3 text-sm">
-          <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-            <p className="font-medium text-pp-navy">Department fleet</p>
+      {completeness && !completeness.complete_enough && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm space-y-2">
+          <p className="font-medium text-amber-950">Completeness pause — technical departments have not started</p>
+          <p className="text-amber-900">{completeness.checklist || completeness.findings.join(" ")}</p>
+          {completeness.missing.length > 0 && (
+            <p className="text-amber-800 text-xs">Missing: {completeness.missing.join(", ")}</p>
+          )}
+          {completeness.model ? <p className="text-xs text-amber-800">Gemma model: {completeness.model}</p> : null}
+        </div>
+      )}
+      {pending && !pending.confirmed && (
+        <div className="rounded-xl border border-pp-border bg-white p-4 text-sm space-y-2">
+          <p className="font-medium text-pp-navy">Human-in-the-loop confirmation required</p>
+          <p className="text-slate-600">
+            Agent drafted <span className="font-mono">{pending.kind}</span>. It has not been sent or recorded.
+          </p>
+          {typeof pending.payload.message === "string" && (
+            <p className="text-slate-700 whitespace-pre-wrap">{pending.payload.message}</p>
+          )}
+          {typeof pending.payload.note === "string" && (
+            <p className="text-slate-700 whitespace-pre-wrap">{pending.payload.note}</p>
+          )}
+          {canDecide && (
+            <div className="flex flex-wrap gap-2">
+              <button type="button" disabled={busy === "hitl"} onClick={onConfirmHitl} className="pp-btn-primary text-sm py-1.5 disabled:opacity-50">
+                {busy === "hitl" ? "Confirming…" : "Confirm agent draft"}
+              </button>
+              <button type="button" disabled={busy === "hitl-reject"} onClick={onRejectHitl} className="pp-btn-secondary text-sm py-1.5 disabled:opacity-50">
+                Reject draft
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+      {plan && (
+        <div className="bg-white border border-pp-border rounded-xl p-4 text-sm space-y-2">
+          <p className="font-medium text-pp-navy">Routing plan</p>
+          <p className="text-slate-600">
+            {plan.reason === "incomplete_filing"
+              ? "Incomplete filing — no technical specialists delegated."
+              : `Coordinator delegated: ${plan.departments.length ? plan.departments.join(", ") : "none"}.`}
+          </p>
+          {Object.keys(plan.skipped || {}).length > 0 && (
+            <ul className="text-slate-600 list-disc pl-5 space-y-1">
+              {Object.entries(plan.skipped).map(([dept, reason]) => (
+                <li key={dept}>
+                  <span className="capitalize font-medium">{dept}</span> skipped — {reason}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+      <div className="bg-slate-50 border border-pp-border rounded-xl p-3 text-sm">
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+          <p className="font-medium text-pp-navy">Department fleet</p>
+          <div className="flex flex-wrap gap-2">
             <button type="button" disabled={busy === "fleet"} onClick={onFleet} className="pp-btn-secondary text-sm py-1.5 disabled:opacity-50">
               {busy === "fleet" ? "Queuing…" : "Run Agent Runtime fleet"}
             </button>
+            <button type="button" disabled={!canDecide || busy === "crash"} onClick={onInterrupt} className="pp-btn-ghost text-sm py-1.5 border border-pp-border disabled:opacity-50">
+              {busy === "crash" ? "Flagging…" : "Simulate crash"}
+            </button>
+            <button type="button" disabled={!canDecide || busy === "resume"} onClick={onResume} className="pp-btn-ghost text-sm py-1.5 border border-pp-border disabled:opacity-50">
+              {busy === "resume" ? "Resuming…" : "Resume"}
+            </button>
           </div>
+        </div>
+        {bundle.interrupt_requested && (
+          <p className="text-amber-800 text-xs mb-2">Interrupt requested — remaining A2A hops will skip. Resume to continue completed departments only.</p>
+        )}
+        {(bundle.critic_iterations ?? 0) > 0 && (
+          <p className="text-xs text-slate-500 mb-2">Critic loop iterations: {bundle.critic_iterations}</p>
+        )}
+        {bundle.workflow.length > 0 && (
           <div className="flex flex-wrap gap-2">
             {bundle.workflow.map((step) => (
               <span key={step.department ?? step.name} className="px-2 py-0.5 rounded-full text-xs capitalize bg-white border border-pp-border">
@@ -193,8 +271,8 @@ export function DistributionTab({
               </span>
             ))}
           </div>
-        </div>
-      )}
+        )}
+      </div>
       <div className="flex flex-wrap items-center justify-between gap-2">
         {distributionUpdatedAt && (
           <div className="text-sm text-slate-600">
@@ -213,7 +291,7 @@ export function DistributionTab({
       {bundle.distribution.length === 0 ? (
         <EmptyState
           title="No department reviews yet"
-          description="Distribution results appear after intake or after you refresh from NYC Open Data."
+          description="The coordinator writes a routing plan first. Incomplete filings pause with a checklist claim. Complete filings delegate only the selected specialists."
         />
       ) : (
         <>
@@ -234,6 +312,7 @@ export function DistributionTab({
                     <td>
                       <button type="button" onClick={() => onSelect(row)} className="flex items-center gap-2 text-left capitalize font-medium text-pp-navy hover:text-pp-accent w-full">
                         <span>{row.department}</span>
+                        {row.generated_by ? <span className="text-slate-400 text-xs font-normal">{row.generated_by}</span> : null}
                         <span className="text-slate-400 text-xs" aria-hidden="true">
                           ›
                         </span>

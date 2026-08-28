@@ -1,3 +1,3 @@
-from permit_pilot.agents._factory import build_agent
+from permit_pilot.agents._factory import build_coordinator
 
-root_agent = build_agent("permit_orchestrator")
+root_agent = build_coordinator()

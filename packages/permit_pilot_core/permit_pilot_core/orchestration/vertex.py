@@ -6,7 +6,7 @@ from permit_pilot_core.models import Case, DepartmentReview
 
 
 def orchestrate_case_summary(case: Case, reviews: list[DepartmentReview]) -> str:
-    """Clerk briefing via Vertex Gemini (google-genai SDK, Context7-current)."""
+    """Briefing fallback via Vertex Gemini when Agent Runtime is unavailable."""
     from permit_pilot_core.platform.armor import sanitize_model_response, sanitize_user_prompt
     from permit_pilot_core.settings import get_settings
 

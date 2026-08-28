@@ -17,9 +17,12 @@ from permit_pilot_core.models import (
     Claim,
     ClaimResponseRequest,
     ClerkBriefing,
+    CompletenessScan,
     CaseUpdateRequest,
     ParcelContext,
+    PendingHitl,
     RelatedPermit,
+    RoutingPlan,
 )
 from permit_pilot_core.platform import memory as memory_bank
 from permit_pilot_core.platform.tasks import enqueue_distribution
@@ -66,6 +69,15 @@ def _briefing_from_store(raw: dict | None) -> ClerkBriefing | None:
         generated_at=datetime.fromisoformat(str(raw["generated_at"])),
         generated_by=str(raw.get("generated_by") or "system"),
     )
+
+
+def _optional_model(model_cls, data: dict | None):
+    if not data:
+        return None
+    try:
+        return model_cls.model_validate(data)
+    except Exception:
+        return None
 
 
 def _queue_distribution(*, store, case_id: str, actor: str, reason: str, action: str) -> dict[str, str | bool]:
@@ -149,6 +161,11 @@ def get_case_bundle(case_id: str, request: Request) -> CaseBundle:
         parcel=None,
         briefing=_briefing_from_store(store.get_briefing(case_id)),
         memories=memories,
+        routing_plan=_optional_model(RoutingPlan, store.get_routing_plan(case_id)),
+        completeness=_optional_model(CompletenessScan, store.get_completeness(case_id)),
+        interrupt_requested=store.interrupt_requested(case_id),
+        pending_hitl=_optional_model(PendingHitl, store.get_pending_hitl(case_id)),
+        critic_iterations=store.get_critic_iterations(case_id),
     )
 
 
@@ -317,6 +334,10 @@ def respond_to_claim(
         detail=body.message.strip(),
     )
     try:
+        memory_bank.create_fact(bbl=case.bbl if case else "", fact=f"applicant responded: {body.message.strip()[:400]}")
+    except Exception:
+        pass
+    try:
         task_name = enqueue_distribution(case_id=case_id, reason="claim_response")
         store.append_audit(
             case_id,
@@ -335,14 +356,7 @@ def respond_to_claim(
     return claim
 
 
-@router.post("/{case_id}/decision")
-def post_decision(
-    case_id: str,
-    body: CaseDecision,
-    request: Request,
-    current_user: Annotated[ClerkUser, Depends(get_current_user)],
-) -> Case:
-    store = store_from_request(request)
+def _apply_decision(store, *, case_id: str, body: CaseDecision, actor: str) -> Case:
     case = store.get_case(case_id)
     if not case:
         raise HTTPException(status_code=404, detail="Case not found")
@@ -369,12 +383,114 @@ def post_decision(
     else:
         store.set_case_status(case_id, CaseStatus.CHANGES_REQUESTED)
     store.complete_open_tasks_for_case(case_id)
-    store.append_audit(
-        case_id,
-        actor=clerk_actor(current_user),
-        action=body.decision,
-        detail=body.note.strip(),
-    )
+    store.append_audit(case_id, actor=actor, action=body.decision, detail=body.note.strip())
     updated = store.get_case(case_id)
     assert updated is not None
     return updated
+
+
+@router.post("/{case_id}/decision")
+def post_decision(
+    case_id: str,
+    body: CaseDecision,
+    request: Request,
+    current_user: Annotated[ClerkUser, Depends(get_current_user)],
+) -> Case:
+    store = store_from_request(request)
+    return _apply_decision(store, case_id=case_id, body=body, actor=clerk_actor(current_user))
+
+
+@router.post("/{case_id}/hitl/confirm")
+def confirm_hitl(
+    case_id: str,
+    request: Request,
+    current_user: Annotated[ClerkUser, Depends(get_current_user)],
+):
+    store = store_from_request(request)
+    if not store.get_case(case_id):
+        raise HTTPException(status_code=404, detail="Case not found")
+    pending = store.get_pending_hitl(case_id)
+    if not pending or pending.get("confirmed"):
+        raise HTTPException(status_code=409, detail="No pending HITL action to confirm")
+    kind = str(pending.get("kind") or "")
+    payload = pending.get("payload") or {}
+    actor = clerk_actor(current_user)
+    if kind == "send_claim":
+        message = str(payload.get("message") or "").strip()
+        if not message:
+            raise HTTPException(status_code=400, detail="Draft claim has no message")
+        claim = store.create_claim(case_id, message, notify=True)
+        store.save_pending_hitl(case_id, None)
+        store.append_audit(case_id, actor=actor, action="hitl_claim_confirmed", detail=message[:300])
+        return {"confirmed": True, "kind": kind, "claim_id": claim.id}
+    if kind == "record_decision":
+        body = CaseDecision(
+            decision=str(payload.get("decision") or "approve"),
+            note=str(payload.get("note") or ""),
+            override=bool(payload.get("override")),
+        )
+        case = _apply_decision(store, case_id=case_id, body=body, actor=actor)
+        store.save_pending_hitl(case_id, None)
+        store.append_audit(case_id, actor=actor, action="hitl_decision_confirmed", detail=body.decision)
+        return {"confirmed": True, "kind": kind, "status": case.status.value}
+    raise HTTPException(status_code=400, detail=f"Unknown HITL kind: {kind}")
+
+
+@router.post("/{case_id}/hitl/reject")
+def reject_hitl(
+    case_id: str,
+    request: Request,
+    current_user: Annotated[ClerkUser, Depends(get_current_user)],
+):
+    store = store_from_request(request)
+    if not store.get_case(case_id):
+        raise HTTPException(status_code=404, detail="Case not found")
+    pending = store.get_pending_hitl(case_id)
+    if not pending:
+        raise HTTPException(status_code=409, detail="No pending HITL action")
+    store.save_pending_hitl(case_id, None)
+    store.append_audit(
+        case_id,
+        actor=clerk_actor(current_user),
+        action="hitl_rejected",
+        detail=str(pending.get("kind") or ""),
+    )
+    return {"confirmed": False, "rejected": True}
+
+
+@router.post("/{case_id}/distribution/interrupt")
+def interrupt_distribution(
+    case_id: str,
+    request: Request,
+    current_user: Annotated[ClerkUser, Depends(get_current_user)],
+):
+    store = store_from_request(request)
+    if not store.get_case(case_id):
+        raise HTTPException(status_code=404, detail="Case not found")
+    store.set_interrupt(case_id, True)
+    store.append_audit(
+        case_id,
+        actor=clerk_actor(current_user),
+        action="distribution_interrupt_requested",
+        detail="Simulate crash — remaining A2A hops will skip",
+    )
+    return {"interrupt_requested": True}
+
+
+@router.post("/{case_id}/distribution/resume")
+def resume_distribution(
+    case_id: str,
+    request: Request,
+    current_user: Annotated[ClerkUser, Depends(get_current_user)],
+):
+    store = store_from_request(request)
+    if not store.get_case(case_id):
+        raise HTTPException(status_code=404, detail="Case not found")
+    store.set_interrupt(case_id, False)
+    return _queue_distribution(
+        store=store,
+        case_id=case_id,
+        actor=clerk_actor(current_user),
+        reason="resume",
+        action="distribution_resumed",
+    )

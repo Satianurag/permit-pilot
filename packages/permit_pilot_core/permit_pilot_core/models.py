@@ -51,6 +51,33 @@ class DepartmentReview(BaseModel):
     evidence: list[EvidenceItem] = Field(default_factory=list)
     citations: list[Citation] = Field(default_factory=list)
     updated_at: datetime
+    generated_by: str = ""
+    model: str = ""
+
+
+class CompletenessScan(BaseModel):
+    complete_enough: bool
+    missing: list[str] = Field(default_factory=list)
+    findings: list[str] = Field(default_factory=list)
+    checklist: str = ""
+    generated_by: str = "completeness_scan"
+    model: str = ""
+
+
+class RoutingPlan(BaseModel):
+    departments: list[str] = Field(default_factory=list)
+    skipped: dict[str, str] = Field(default_factory=dict)
+    include_critic: bool = True
+    reason: str = ""
+    histdist: str = ""
+    demolition: bool = False
+    generated_by: str = "permit_orchestrator"
+
+
+class PendingHitl(BaseModel):
+    kind: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+    confirmed: bool = False
 
 
 class Case(BaseModel):
@@ -191,6 +218,11 @@ class CaseBundle(BaseModel):
     briefing: ClerkBriefing | None = None
     memories: list[dict[str, Any]] = Field(default_factory=list)
     fleet_run_id: str | None = None
+    routing_plan: RoutingPlan | None = None
+    completeness: CompletenessScan | None = None
+    interrupt_requested: bool = False
+    pending_hitl: PendingHitl | None = None
+    critic_iterations: int = 0
 
 
 class CaseDecision(BaseModel):

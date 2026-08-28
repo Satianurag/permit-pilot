@@ -19,4 +19,4 @@ ENV PORT=8080
 ENV STATIC_ROOT=/app/static
 EXPOSE 8080
 
-CMD ["uvicorn", "permit_pilot_api.main:app", "--host", "0.0.0.0", "--port", "8080", "--proxy-headers", "--forwarded-allow-ips", "*"]
+CMD ["uvicorn", "permit_pilot_api.main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "2", "--proxy-headers", "--forwarded-allow-ips", "*"]

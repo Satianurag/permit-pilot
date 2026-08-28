@@ -3,7 +3,7 @@ name = "permit-pilot-orchestrator"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
-  "google-adk>=1.25.0",
+  "google-adk[a2a]>=1.25.0",
   "google-auth>=2.14.1",
   "google-cloud-aiplatform[adk,agent_engines]>=1.111.0",
   "mcp>=1.9,<2",

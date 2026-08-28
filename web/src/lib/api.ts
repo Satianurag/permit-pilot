@@ -42,6 +42,33 @@ export interface DepartmentReview {
   evidence: EvidenceItem[];
   citations: { code: string; excerpt: string; source_url?: string | null }[];
   updated_at: string;
+  generated_by?: string;
+  model?: string;
+}
+
+export interface RoutingPlan {
+  departments: string[];
+  skipped: Record<string, string>;
+  include_critic: boolean;
+  reason: string;
+  histdist?: string;
+  demolition?: boolean;
+  generated_by?: string;
+}
+
+export interface CompletenessScan {
+  complete_enough: boolean;
+  missing: string[];
+  findings: string[];
+  checklist: string;
+  generated_by?: string;
+  model?: string;
+}
+
+export interface PendingHitl {
+  kind: string;
+  payload: Record<string, unknown>;
+  confirmed: boolean;
 }
 
 export interface Claim {
@@ -110,7 +137,7 @@ export interface AgentCard {
 export interface WorkflowStep {
   name: string;
   department: string | null;
-  status: "pending" | "running" | "completed" | "failed" | "interrupted";
+  status: "pending" | "running" | "completed" | "failed" | "interrupted" | "skipped";
   detail: string;
   started_at: string | null;
   completed_at: string | null;
@@ -197,6 +224,11 @@ export interface CaseBundle {
   briefing: ClerkBriefing | null;
   memories?: Record<string, unknown>[];
   fleet_run_id?: string | null;
+  routing_plan?: RoutingPlan | null;
+  completeness?: CompletenessScan | null;
+  interrupt_requested?: boolean;
+  pending_hitl?: PendingHitl | null;
+  critic_iterations?: number;
 }
 
 export interface AuditEvent {
@@ -365,6 +397,12 @@ export const api = {
     post<Case>(`/cases/${id}/decision`, { decision, note, override }),
   orchestrate: (id: string) => post<{ summary: string; model: string }>(`/cases/${id}/orchestrate`),
   runFleet: (id: string) => post<{ queued: boolean; task?: string; departments?: number }>(`/cases/${id}/fleet/run`),
+  interruptDistribution: (id: string) => post<{ interrupt_requested: boolean }>(`/cases/${id}/distribution/interrupt`),
+  resumeDistribution: (id: string) => post<{ queued: boolean; task?: string; reason?: string }>(`/cases/${id}/distribution/resume`),
+  confirmHitl: (id: string) => post<{ confirmed: boolean; kind: string }>(`/cases/${id}/hitl/confirm`),
+  rejectHitl: (id: string) => post<{ confirmed: boolean; rejected: boolean }>(`/cases/${id}/hitl/reject`),
+  invokeAgent: (name: string, body: { fingerprint: string; message?: string; case_id?: string }) =>
+    post<{ ok: boolean; agent: string; text?: string; engine_id?: string }>(`/agents/${encodeURIComponent(name)}/invoke`, body),
   listAgents: () => get<{ agents: AgentCard[]; registry: Record<string, unknown> }>("/agents"),
   getGovernance: () => get<Record<string, unknown>>("/governance"),
   getParcelMemory: (bbl: string, q?: string) =>

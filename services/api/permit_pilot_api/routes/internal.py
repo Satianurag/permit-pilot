@@ -72,7 +72,13 @@ async def run_distribution_task(
     engine = engine_from_request(request)
     if not store.get_case(case_id):
         raise HTTPException(status_code=404, detail="Case not found")
-    reviews = await run_distribution(store, engine, case_id=case_id, user_id=actor)
+    reviews = await run_distribution(
+        store,
+        engine,
+        case_id=case_id,
+        user_id=actor,
+        reason=str(body.get("reason") or "intake"),
+    )
     store.append_audit(
         case_id,
         actor=actor,
@@ -108,6 +114,14 @@ async def eventarc_claim_written(
         action="eventarc_claim_resume_enqueued",
         detail=task_name,
     )
+    try:
+        case = store.get_case(case_id)
+        if case:
+            from permit_pilot_core.platform import memory as memory_bank
+
+            memory_bank.create_fact(bbl=case.bbl, fact="applicant responded: Eventarc claim resume")
+    except Exception:
+        pass
     return {"queued": True, "task": task_name, "case_id": case_id}
 
 

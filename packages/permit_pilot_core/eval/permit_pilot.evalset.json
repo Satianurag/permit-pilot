@@ -1,0 +1,91 @@
+{
+  "eval_set_id": "permit_pilot_golden_bbls",
+  "name": "Permit Pilot golden BBLs",
+  "eval_cases": [
+    {
+      "eval_id": "parsons-building-fail",
+      "conversation": [
+        {
+          "invocation_id": "parsons-building",
+          "user_content": {
+            "parts": [
+              {
+                "text": "Review 43-30 PARSONS BOULEVARD demolition. BBL 4051980021 BIN 4117367. Persist the building review."
+              }
+            ]
+          },
+          "final_response": {
+            "parts": [{ "text": "Building FAIL: active DOB violations; cite 1 RCNY 101-07." }]
+          },
+          "intermediate_data": {
+            "tool_uses": [
+              { "name": "lookup_dob_violations", "args": { "bin": "4117367", "bbl": "4051980021" } },
+              {
+                "name": "persist_review",
+                "args": { "department": "building", "status": "fail", "case_id": "*" }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "eval_id": "178-street-landmarks",
+      "conversation": [
+        {
+          "invocation_id": "178-street-plan",
+          "user_content": {
+            "parts": [
+              {
+                "text": "Write a routing plan for 112-08 178 STREET alteration BBL 4103000034 with a BIN present."
+              }
+            ]
+          },
+          "final_response": {
+            "parts": [{ "text": "Routing plan includes landmarks for this Queens alteration." }]
+          },
+          "intermediate_data": {
+            "tool_uses": [
+              { "name": "suggest_routing_plan", "args": { "bbl": "4103000034", "work_type": "Alteration" } },
+              { "name": "persist_routing_plan", "args": { "case_id": "*" } }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "eval_id": "macon-skip-lpc",
+      "conversation": [
+        {
+          "invocation_id": "macon-plan",
+          "user_content": {
+            "parts": [
+              {
+                "text": "Write a routing plan for 761 MACON STREET plumbing BBL 3014930048 BIN 3040031. PLUTO histdist is empty."
+              }
+            ]
+          },
+          "final_response": {
+            "parts": [
+              {
+                "text": "Skip landmarks: plumbing work, empty histdist, no landmark memory."
+              }
+            ]
+          },
+          "intermediate_data": {
+            "tool_uses": [
+              {
+                "name": "suggest_routing_plan",
+                "args": {
+                  "bbl": "3014930048",
+                  "bin": "3040031",
+                  "work_type": "Plumbing modifications to existing kitchen"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

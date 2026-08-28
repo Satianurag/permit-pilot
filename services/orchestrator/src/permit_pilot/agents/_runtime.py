@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import os
+from typing import Any
 
 try:
     from agentplatform.agent_engines import AdkApp
 except ImportError:  # pragma: no cover - vertexai package name on some runtimes
     from vertexai.agent_engines import AdkApp
 
-from google.adk.agents import Agent
 from google.adk.apps import App
 
 
@@ -28,7 +28,7 @@ class FleetAdkApp(AdkApp):
         _force_global_vertex()
 
 
-def wrap_for_runtime(agent: Agent) -> FleetAdkApp:
+def wrap_for_runtime(agent: Any) -> FleetAdkApp:
     return FleetAdkApp(
         app=App(name=agent.name, root_agent=agent),
         enable_tracing=True,

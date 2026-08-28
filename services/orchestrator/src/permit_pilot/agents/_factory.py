@@ -13,7 +13,7 @@ from google.adk.tools.mcp_tool.mcp_session_manager import (
 )
 from google.adk.tools.mcp_tool.mcp_toolset import McpToolset
 
-from permit_pilot_core.platform.fleet import fleet_by_name
+from permit_pilot_core.platform.fleet import all_agent_specs, fleet_by_name
 from permit_pilot_core.settings import get_settings
 
 logger = logging.getLogger(__name__)
@@ -155,28 +155,190 @@ def _mcp_http_client_factory(headers=None, timeout=None, auth=None):
     return create_mcp_http_client(headers=merged, timeout=timeout, auth=auth)
 
 
-def build_agent(name: str) -> Agent:
+def _agent_card_url(engine_id: str) -> str:
+    settings = get_settings()
+    if engine_id.startswith("projects/"):
+        resource = engine_id
+    else:
+        resource = (
+            f"projects/{settings.project_id}/locations/{settings.region}/reasoningEngines/{engine_id}"
+        )
+    return f"https://{settings.region}-aiplatform.googleapis.com/v1/{resource}/a2a/agentCard"
+
+
+def _preload_memory_tools() -> list:
+    try:
+        from google.adk.tools.preload_memory_tool import PreloadMemoryTool
+
+        return [PreloadMemoryTool()]
+    except Exception:  # noqa: BLE001
+        try:
+            from google.adk.tools import preload_memory
+
+            tool = getattr(preload_memory, "PreloadMemoryTool", None) or preload_memory
+            return [tool() if callable(tool) else tool]
+        except Exception:  # noqa: BLE001
+            logger.warning("PreloadMemoryTool unavailable in this ADK version")
+            return []
+
+
+def _after_agent_save_memory(callback_context=None, **_kwargs):
+    try:
+        session = getattr(callback_context, "session", None) or getattr(callback_context, "session_id", None)
+        state = getattr(callback_context, "state", None) or {}
+        bbl = ""
+        if isinstance(state, dict):
+            bbl = str(state.get("bbl") or "")
+        if session and bbl:
+            from permit_pilot_core.platform import memory as memory_bank
+
+            memory_bank.generate_from_session(session=str(session), bbl=bbl)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("add_session_to_memory callback failed: %s", exc)
+    return None
+
+
+def _remote_or_local(name: str) -> Any:
+    if os.environ.get("PERMIT_PILOT_INPROCESS_SPECIALISTS", "").strip() in {"1", "true", "yes"}:
+        return build_agent(name)
     settings = get_settings()
     spec = fleet_by_name()[name]
-    mcp_url = _mcp_url()
+    engine_id = settings.engine_id_map.get(name) or os.environ.get(f"{name.upper()}_ENGINE_ID", "")
+    card = os.environ.get(f"{name.upper()}_AGENT_CARD_URL", "").strip()
+    if not card and engine_id:
+        card = _agent_card_url(engine_id)
+    if card:
+        try:
+            from google.adk.agents.remote_a2a_agent import RemoteA2aAgent
+        except Exception:  # noqa: BLE001
+            try:
+                from google.adk.agents import RemoteA2aAgent  # type: ignore
+            except Exception:
+                RemoteA2aAgent = None  # type: ignore
+        if RemoteA2aAgent is not None:
+            kwargs = {
+                "name": spec.name,
+                "description": spec.description,
+                "agent_card": card,
+            }
+            try:
+                import inspect
+
+                params = inspect.signature(RemoteA2aAgent.__init__).parameters
+                if "use_legacy" in params:
+                    kwargs["use_legacy"] = False
+            except (TypeError, ValueError):
+                kwargs["use_legacy"] = False
+            try:
+                return RemoteA2aAgent(**kwargs)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("RemoteA2aAgent(%s) kwargs failed (%s); retrying minimal constructor", name, exc)
+                try:
+                    return RemoteA2aAgent(
+                        name=spec.name,
+                        description=spec.description,
+                        agent_card=card,
+                    )
+                except Exception as inner:  # noqa: BLE001
+                    logger.warning("RemoteA2aAgent(%s) failed (%s); using in-process specialist", name, inner)
+    return build_agent(name)
+
+
+def build_agent(name: str) -> Agent:
+    settings = get_settings()
+    spec = all_agent_specs()[name]
     os.environ["VERTEX_LOCATION"] = settings.vertex_location
     os.environ["GOOGLE_CLOUD_LOCATION"] = settings.vertex_location
     os.environ.setdefault("GOOGLE_GENAI_USE_VERTEXAI", "true")
     os.environ.setdefault("VERTEX_MODEL", settings.vertex_model)
-    toolset = McpToolset(
-        connection_params=StreamableHTTPConnectionParams(
-            url=mcp_url,
-            timeout=30.0,
-            sse_read_timeout=120.0,
-            httpx_client_factory=_mcp_http_client_factory,
-        ),
-        tool_filter=list(spec.tools),
-        header_provider=_identity_headers,
-    )
+    tools: list[Any] = []
+    if spec.tools:
+        mcp_url = _mcp_url()
+        tools.append(
+            McpToolset(
+                connection_params=StreamableHTTPConnectionParams(
+                    url=mcp_url,
+                    timeout=30.0,
+                    sse_read_timeout=120.0,
+                    httpx_client_factory=_mcp_http_client_factory,
+                ),
+                tool_filter=list(spec.tools),
+                header_provider=_identity_headers,
+            )
+        )
     return Agent(
         name=spec.name,
         model=settings.vertex_model,
         description=spec.description,
         instruction=spec.instruction,
-        tools=[toolset],
+        tools=tools,
     )
+
+
+def build_coordinator() -> Agent:
+    """Coordinator LlmAgent with RemoteA2aAgent specialists and a critic LoopAgent."""
+    settings = get_settings()
+    spec = fleet_by_name()["permit_orchestrator"]
+    specialists = [
+        _remote_or_local("zoning_agent"),
+        _remote_or_local("building_agent"),
+        _remote_or_local("fire_agent"),
+        _remote_or_local("utilities_agent"),
+        _remote_or_local("landmarks_agent"),
+        _remote_or_local("housing_agent"),
+    ]
+    critic = _remote_or_local("critic_agent")
+    completeness = build_agent("completeness_agent")
+    claims = build_agent("claims_agent")
+    briefing = build_agent("briefing_agent")
+    sub_agents: list[Any] = [completeness, *specialists]
+    try:
+        from google.adk.agents import LoopAgent
+
+        refiner = Agent(
+            name="department_refiner",
+            model=settings.vertex_model,
+            description="Re-routes critic FAIL to the named department specialist.",
+            instruction=(
+                "If the critic FAILed, transfer_to_agent the named offending department "
+                "and include the critic findings. Do not invent citations. Then stop."
+            ),
+        )
+        critic_loop = LoopAgent(
+            name="cite_or_reject_loop",
+            sub_agents=[critic, refiner],
+            max_iterations=3,
+        )
+        sub_agents.append(critic_loop)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("LoopAgent unavailable (%s); attaching critic as a sub-agent", exc)
+        sub_agents.append(critic)
+    sub_agents.extend([claims, briefing])
+
+    tools: list[Any] = []
+    if spec.tools:
+        tools.append(
+            McpToolset(
+                connection_params=StreamableHTTPConnectionParams(
+                    url=_mcp_url(),
+                    timeout=30.0,
+                    sse_read_timeout=120.0,
+                    httpx_client_factory=_mcp_http_client_factory,
+                ),
+                tool_filter=list(spec.tools),
+                header_provider=_identity_headers,
+            )
+        )
+    tools.extend(_preload_memory_tools())
+    kwargs: dict[str, Any] = {
+        "name": spec.name,
+        "model": settings.vertex_model,
+        "description": spec.description,
+        "instruction": spec.instruction,
+        "tools": tools,
+        "sub_agents": sub_agents,
+    }
+    try:
+        return Agent(**kwargs, after_agent_callback=_after_agent_save_memory)
+    except TypeError:
+        return Agent(**kwargs)

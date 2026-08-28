@@ -57,6 +57,9 @@ async def intake_case(
         borough=payload.borough,
     )
     resolved = await resolve_parcel(create_payload, socrata)
+    if not payload.bin.strip():
+        # Clerk left BIN blank — completeness checklist, not a silent PLUTO fill.
+        resolved = resolved.model_copy(update={"bin": ""})
     case = store.create_case(resolved)
 
     if redacted_packet:

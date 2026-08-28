@@ -67,7 +67,6 @@
     "resource_name": "projects/538666547847/locations/us-central1/reasoningEngines/3804069988814290944",
     "effective_identity": "agents.global.proj-538666547847.system.id.goog/resources/aiplatform/projects/538666547847/locations/us-central1/reasoningEngines/3804069988814290944",
     "identity_type": "AGENT_IDENTITY",
-    "spiffe": "agents.global.proj-538666547847.system.id.goog/resources/aiplatform/projects/538666547847/locations/us-central1/reasoningEngines/3804069988814290944",
-    "registry_agent_uid": "agentregistry-00000000-0000-0000-ff8f-12ba5a2edc54"
+    "spiffe": "agents.global.proj-538666547847.system.id.goog/resources/aiplatform/projects/538666547847/locations/us-central1/reasoningEngines/3804069988814290944"
   }
 }

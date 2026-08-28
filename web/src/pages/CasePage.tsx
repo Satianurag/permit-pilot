@@ -168,14 +168,14 @@ export default function CasePage() {
   const canDecide = Boolean(caseData && !TERMINAL.has(caseData.status));
   const mutating = busy !== null;
   const showDecisionFooter = canDecide && (tab === "distribution" || tab === "summary");
-  const failed = bundle?.distribution.filter((row) => row.status === "fail" && row.department !== "critic") ?? [];
-  const needsInfo =
-    bundle?.distribution.filter((row) => row.status === "needs_info" && row.department !== "critic") ?? [];
-  const checking = bundle?.distribution.some((row) => row.status === "checking") ?? false;
+  const skippedDepts = new Set(Object.keys(bundle?.routing_plan?.skipped || {}));
+  const technicalReviews =
+    bundle?.distribution.filter((row) => row.department !== "critic" && !skippedDepts.has(row.department)) ?? [];
+  const failed = technicalReviews.filter((row) => row.status === "fail");
+  const needsInfo = technicalReviews.filter((row) => row.status === "needs_info");
+  const checking = technicalReviews.some((row) => row.status === "checking");
   const overrideNeeded = failed.length > 0 || needsInfo.length > 0;
-  const departmentRows = sortDepartmentReviews(
-    bundle?.distribution.filter((row) => row.department !== "critic") ?? [],
-  );
+  const departmentRows = sortDepartmentReviews(technicalReviews);
   const criticReview = bundle?.distribution.find((row) => row.department === "critic");
   const distributionUpdatedAt = bundle?.distribution.reduce<string | null>((latest, row) => {
     if (!row.updated_at) return latest;
@@ -527,6 +527,26 @@ export default function CasePage() {
             runAction("fleet", async () => {
               await api.runFleet(caseId);
             }, "Distribution queued on Cloud Tasks.")
+          }
+          onInterrupt={() =>
+            runAction("crash", async () => {
+              await api.interruptDistribution(caseId);
+            }, "Interrupt flagged. Remaining A2A hops will skip.")
+          }
+          onResume={() =>
+            runAction("resume", async () => {
+              await api.resumeDistribution(caseId);
+            }, "Resume queued. Completed specialists are skipped.")
+          }
+          onConfirmHitl={() =>
+            runAction("hitl", async () => {
+              await api.confirmHitl(caseId);
+            }, "HITL confirmed.")
+          }
+          onRejectHitl={() =>
+            runAction("hitl-reject", async () => {
+              await api.rejectHitl(caseId);
+            }, "Agent draft rejected. Case was not mutated.")
           }
           onSelect={setSelected}
         />

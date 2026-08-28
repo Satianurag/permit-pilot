@@ -34,12 +34,14 @@ TASKS=$(curl -fsS "${AUTH[@]}" "$BASE/api/tasks")
 echo "$TASKS" | python3 -c "import sys,json; d=json.load(sys.stdin); assert len(d)>=1, 'no open tasks'"
 CASE_ID=$(echo "$TASKS" | python3 -c "import sys,json; print(json.load(sys.stdin)[0]['case_id'])")
 
-echo "=== 4. Case bundle (live Socrata-backed distribution) ==="
+echo "=== 4. Case bundle (routing plan + completeness + distribution) ==="
 curl -fsS "${AUTH[@]}" "$BASE/api/cases/$CASE_ID/bundle" | python3 -c "
 import sys,json
 d=json.load(sys.stdin)
 assert d['case']['id']
 assert 'distribution' in d
+assert 'routing_plan' in d or d.get('routing_plan') is None
+assert 'completeness' in d or d.get('completeness') is None
 assert d.get('observability',{}).get('cloud_trace_url')
 "
 
@@ -94,6 +96,30 @@ import sys,json
 d=json.load(sys.stdin)
 assert d.get('queued') is True, d
 "
+
+echo "=== 9b. Interrupt is authenticated; unauthenticated resume is 401 ==="
+CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/cases/$CASE_ID/distribution/resume")
+test "$CODE" = "401"
+curl -fsS "${AUTH[@]}" -X POST "$BASE/api/cases/$CASE_ID/distribution/interrupt" | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+assert d.get('interrupt_requested') is True, d
+"
+curl -fsS "${AUTH[@]}" -X POST "$BASE/api/cases/$CASE_ID/distribution/resume" | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+assert d.get('queued') is True, d
+"
+
+echo "=== 9c. Gateway fingerprint allowlist (tampered 403, not missing admin) ==="
+FP=$(curl -fsS "${AUTH[@]}" "$BASE/api/agents" | python3 -c "import sys,json; print(json.load(sys.stdin)['agents'][0]['fingerprint'])")
+NAME=$(curl -fsS "${AUTH[@]}" "$BASE/api/agents" | python3 -c "import sys,json; print(json.load(sys.stdin)['agents'][0]['name'])")
+TAMPER=$(curl -s -o /tmp/pp-tamper.json -w "%{http_code}" "${AUTH[@]}" -X POST "$BASE/api/agents/$NAME/invoke" \
+  -H "Content-Type: application/json" \
+  -d "{\"fingerprint\":\"${FP}x\",\"message\":\"tamper\"}")
+test "$TAMPER" = "403"
+python3 -c "import json; d=json.load(open('/tmp/pp-tamper.json')); assert 'allowlist' in d.get('detail','').lower() or 'fingerprint' in d.get('detail','').lower() or 'tamper' in d.get('detail','').lower(), d"
+
 
 echo "=== 10. Trace + observability consoles ==="
 curl -fsS "${AUTH[@]}" "$BASE/api/cases/$CASE_ID/trace" >/dev/null

@@ -68,7 +68,7 @@ def retrieve(*, bbl: str, query: str | None = None, engine_id: str | None = None
     body: dict[str, Any] = {"scope": {"bbl": bbl}}
     if query:
         body["similaritySearchParams"] = {"searchQuery": query, "topK": 8}
-    response = httpx.post(url, headers=_headers(), json=body, timeout=60.0)
+    response = httpx.post(url, headers=_headers(), json=body, timeout=8.0)
     if response.status_code == 404:
         return []
     response.raise_for_status()
