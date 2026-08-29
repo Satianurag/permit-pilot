@@ -36,7 +36,7 @@ export default function CaseStatusChart({ casesByStatus }: Props) {
         <div key={status} role="listitem">
           <div className="flex items-center justify-between gap-2 mb-1">
             <Link
-              to={`/permits?status=${encodeURIComponent(status)}`}
+              to={`/find?status=${encodeURIComponent(status)}`}
               className="text-sm font-medium text-pp-navy hover:text-pp-accent"
             >
               {formatStatus(status)}

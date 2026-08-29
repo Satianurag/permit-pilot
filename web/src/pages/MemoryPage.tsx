@@ -17,9 +17,9 @@ export default function MemoryPage() {
   return (
     <div className="space-y-6">
       <PageHeader
-        eyebrow="Memory Bank"
-        title="Parcel memory"
-        subtitle="Long-term memories scoped to a BBL so later cases recall prior determinations."
+        eyebrow="Saved for this property"
+        title="Property notes"
+        subtitle="Notes scoped to a lot so a later filing can recall open objections and earlier determinations."
       />
       <Panel title="Lookup">
         <div className="flex flex-wrap gap-2">

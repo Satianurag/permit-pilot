@@ -44,7 +44,7 @@ export function SummaryTab({
   onTogglePermits: () => void;
 }) {
   return (
-    <div role="tabpanel" id={`${tabsId}-panel-summary`} aria-labelledby={`${tabsId}-summary`} className="grid md:grid-cols-2 gap-4">
+    <div role="tabpanel" id={`${tabsId}-panel-overview`} aria-labelledby={`${tabsId}-overview`} className="grid md:grid-cols-2 gap-4">
       <div className="bg-white border border-pp-border rounded-xl p-4">
         <div className="flex items-center justify-between gap-2 mb-3">
           <h3 className="font-medium text-pp-navy">Property</h3>
@@ -357,7 +357,7 @@ export function DocumentsTab({
   planUrl: string | null;
 }) {
   return (
-    <div role="tabpanel" id={`${tabsId}-panel-documents`} aria-labelledby={`${tabsId}-documents`} className="space-y-4">
+    <div role="tabpanel" id={`${tabsId}-panel-packet`} aria-labelledby={`${tabsId}-packet`} className="space-y-4">
       {!bundle?.document ? (
         <EmptyState
           title="No intake document on file"
@@ -435,7 +435,7 @@ export function ClaimsTab({
   onCancelRespond: () => void;
 }) {
   return (
-    <div role="tabpanel" id={`${tabsId}-panel-claims`} aria-labelledby={`${tabsId}-claims`} className="space-y-4">
+    <div role="tabpanel" id={`${tabsId}-panel-applicant`} aria-labelledby={`${tabsId}-applicant`} className="space-y-4">
       <p className="text-sm text-slate-600">
         Claims are recorded on the case file with a reference ID for manual DOB NOW entry. The applicant is not notified automatically.
       </p>
@@ -557,7 +557,7 @@ export function AuditTab({
   onToggleAudit: (id: string) => void;
 }) {
   return (
-    <div role="tabpanel" id={`${tabsId}-panel-audit`} aria-labelledby={`${tabsId}-audit`} className="space-y-6">
+    <div role="tabpanel" id={`${tabsId}-panel-history`} aria-labelledby={`${tabsId}-history`} className="space-y-6">
       <div className="bg-white border border-pp-border rounded-xl p-4">
         <h3 className="font-medium text-pp-navy mb-3">Activity log</h3>
         <TraceReplay

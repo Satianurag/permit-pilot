@@ -1,4 +1,5 @@
 from typing import Annotated, Any
+import logging
 
 from fastapi import APIRouter, Header, HTTPException, Request
 from google.auth.transport import requests as google_requests
@@ -16,6 +17,7 @@ from permit_pilot_core.settings import get_settings
 from permit_pilot_api.deps import engine_from_request, store_from_request
 
 router = APIRouter(prefix="/internal", tags=["internal"])
+logger = logging.getLogger(__name__)
 
 
 def _verify_oidc(authorization: str | None, *, allowed: set[str]) -> str:
@@ -119,9 +121,12 @@ async def eventarc_claim_written(
         if case:
             from permit_pilot_core.platform import memory as memory_bank
 
-            memory_bank.create_fact(bbl=case.bbl, fact="applicant responded: Eventarc claim resume")
-    except Exception:
-        pass
+            memory_bank.create_fact(
+                bbl=case.bbl,
+                fact=f"Applicant responded on {case.address}. Re-check open objections for this property.",
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Property note (Memory Bank) write failed for Eventarc resume on %s: %s", case_id, exc)
     return {"queued": True, "task": task_name, "case_id": case_id}
 
 

@@ -14,6 +14,11 @@ export default defineConfig({
           const path = req.url?.split("?")[0] ?? "";
           if (
             path === "/login" ||
+            path === "/work" ||
+            path === "/find" ||
+            path === "/intake" ||
+            path === "/more" ||
+            path.startsWith("/more/") ||
             path === "/dashboard" ||
             path === "/activity" ||
             path === "/tasks" ||

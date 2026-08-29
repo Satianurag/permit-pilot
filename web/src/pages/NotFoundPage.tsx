@@ -9,17 +9,11 @@ export default function NotFoundPage() {
         description="That route does not exist in Permit Pilot. Return to your task queue or search for a dossier."
         action={
           <div className="flex flex-wrap justify-center gap-2">
-            <Link to="/dashboard" className="pp-btn-primary text-sm">
-              Dashboard
+            <Link to="/work" className="pp-btn-primary text-sm">
+              My work
             </Link>
-            <Link to="/tasks" className="pp-btn-secondary text-sm">
-              My Tasks
-            </Link>
-            <Link to="/activity" className="pp-btn-secondary text-sm">
-              Activity
-            </Link>
-            <Link to="/permits" className="pp-btn-secondary text-sm">
-              Permit search
+            <Link to="/find" className="pp-btn-secondary text-sm">
+              Find a case
             </Link>
           </div>
         }

@@ -43,6 +43,25 @@ class Citation(BaseModel):
     source_url: str | None = None
 
 
+class ObjectionStatus(StrEnum):
+    OPEN = "open"
+    NEW = "new"
+    RESOLVED = "resolved"
+    WITHDRAWN = "withdrawn"
+
+
+class ObjectionItem(BaseModel):
+    """One numbered, code-citing objection in DOB NOW first-review form."""
+
+    obj_no: int
+    department: str = ""
+    code: str
+    description: str
+    recommended_fix: str = ""
+    status: ObjectionStatus = ObjectionStatus.OPEN
+    generated_by: str = ""
+
+
 class DepartmentReview(BaseModel):
     department: Department
     status: ReviewStatus
@@ -50,9 +69,13 @@ class DepartmentReview(BaseModel):
     findings: list[str] = Field(default_factory=list)
     evidence: list[EvidenceItem] = Field(default_factory=list)
     citations: list[Citation] = Field(default_factory=list)
+    objections: list[ObjectionItem] = Field(default_factory=list)
     updated_at: datetime
     generated_by: str = ""
     model: str = ""
+
+    def open_objections(self) -> list[ObjectionItem]:
+        return [item for item in self.objections if item.status in {ObjectionStatus.OPEN, ObjectionStatus.NEW}]
 
 
 class CompletenessScan(BaseModel):

@@ -12,6 +12,7 @@ import { api, Case, Claim, ConditionTemplate, DepartmentReview, Task } from "../
 import { caseBackTarget } from "../lib/caseBack";
 import { sortDepartmentReviews } from "../lib/auditFormat";
 import { readBriefing, writeBriefing } from "../lib/briefingCache";
+import { departmentLabel, generatedByHint } from "../lib/clerkLanguage";
 import { errorMessage, isNotFoundError } from "../lib/errors";
 import { readNoteDraft, writeNoteDraft } from "../lib/noteDraftCache";
 import { reviewClock } from "../lib/reviewClock";
@@ -20,18 +21,34 @@ import {
   AuditTab,
   ClaimsTab,
   DecisionFields,
-  DistributionTab,
   DocumentsTab,
   SummaryTab,
 } from "./case/CaseTabs";
+import { ReviewTab, TechnicalHistoryControls } from "./case/ReviewTab";
 
-const TABS = ["summary", "distribution", "documents", "claims", "audit"] as const;
+const TABS = ["overview", "review", "packet", "applicant", "history"] as const;
 type Tab = (typeof TABS)[number];
+const TAB_LABELS: Record<Tab, string> = {
+  overview: "Overview",
+  review: "Review",
+  packet: "Packet",
+  applicant: "Applicant",
+  history: "History",
+};
+const LEGACY_TABS: Record<string, Tab> = {
+  summary: "overview",
+  distribution: "review",
+  documents: "packet",
+  claims: "applicant",
+  audit: "history",
+};
 const TERMINAL = new Set(["approved", "changes_requested"]);
 const DISTRIBUTION_STALE_MS = 24 * 60 * 60 * 1000;
 
-function isTab(value: string | null): value is Tab {
-  return TABS.includes(value as Tab);
+function resolveTab(value: string | null): Tab {
+  if (value && TABS.includes(value as Tab)) return value as Tab;
+  if (value && LEGACY_TABS[value]) return LEGACY_TABS[value];
+  return "review";
 }
 
 export default function CasePage() {
@@ -41,14 +58,14 @@ export default function CasePage() {
   const navigate = useNavigate();
   const { push } = useToast();
   const [params, setParams] = useSearchParams();
-  const tab: Tab = isTab(params.get("tab")) ? (params.get("tab") as Tab) : "summary";
-  const from = params.get("from") ?? "tasks";
+  const tab: Tab = resolveTab(params.get("tab"));
+  const from = params.get("from") ?? "work";
   const back = caseBackTarget(from);
   const bundleQuery = useCaseBundle(caseId);
   const bundle = bundleQuery.data ?? null;
   const bundleError = bundleQuery.error ? errorMessage(bundleQuery.error) : null;
   const invalidate = useInvalidateCase();
-  const contextQuery = useCaseContext(caseId, tab === "summary");
+  const contextQuery = useCaseContext(caseId, tab === "overview");
   const context = contextQuery.data ?? null;
   const contextLoading = contextQuery.isLoading || contextQuery.isFetching;
   const { data: conditions = [] } = useQuery({
@@ -167,7 +184,7 @@ export default function CasePage() {
   const caseData: Case | null = bundle?.case ?? null;
   const canDecide = Boolean(caseData && !TERMINAL.has(caseData.status));
   const mutating = busy !== null;
-  const showDecisionFooter = canDecide && (tab === "distribution" || tab === "summary");
+  const showDecisionFooter = canDecide && (tab === "review" || tab === "overview");
   const skippedDepts = new Set(Object.keys(bundle?.routing_plan?.skipped || {}));
   const technicalReviews =
     bundle?.distribution.filter((row) => row.department !== "critic" && !skippedDepts.has(row.department)) ?? [];
@@ -330,14 +347,11 @@ export default function CasePage() {
           description="This dossier ID does not exist or you no longer have access."
           action={
             <div className="flex flex-wrap justify-center gap-2">
-              <Link to="/dashboard" className="pp-btn-primary text-sm">
-                Dashboard
+              <Link to="/work" className="pp-btn-primary text-sm">
+                My work
               </Link>
-              <Link to="/tasks" className="pp-btn-secondary text-sm">
-                My Tasks
-              </Link>
-              <Link to="/permits" className="pp-btn-secondary text-sm">
-                Permit search
+              <Link to="/find" className="pp-btn-secondary text-sm">
+                Find a case
               </Link>
             </div>
           }
@@ -419,7 +433,7 @@ export default function CasePage() {
           <button
             type="button"
             className="font-medium underline"
-            onClick={() => navigate(`/cases/${nextTask.case_id}?tab=distribution&from=tasks`)}
+            onClick={() => navigate(`/cases/${nextTask.case_id}?tab=review&from=work`)}
           >
             Open next task: {nextTask.title}
           </button>
@@ -432,20 +446,19 @@ export default function CasePage() {
           {!checking && failed.length > 0 && needsInfo.length > 0 && (
             <>
               {failed.length + needsInfo.length} departments need attention (
-              {failed.map((row) => row.department).join(", ")} failed;{" "}
-              {needsInfo.map((row) => row.department).join(", ")} need info). See Distribution tab.
+              See Review.
             </>
           )}
           {!checking && failed.length > 0 && needsInfo.length === 0 && (
             <>
-              {failed.length} department review{failed.length === 1 ? "" : "s"} failed — see Distribution tab. Request
+              {failed.length} department review{failed.length === 1 ? "" : "s"} have objections — see Review. Request
               changes or approve with override.
             </>
           )}
           {!checking && needsInfo.length > 0 && failed.length === 0 && (
             <>
               {needsInfo.length} department review{needsInfo.length === 1 ? "" : "s"} need more information (
-              {needsInfo.map((row) => row.department).join(", ")}). Add missing identifiers on Summary or approve with
+              {needsInfo.map((row) => row.department).join(", ")}). Add missing identifiers on Overview or approve with
               override.
             </>
           )}
@@ -468,16 +481,16 @@ export default function CasePage() {
             aria-selected={tab === name}
             aria-controls={`${tabsId}-panel-${name}`}
             onClick={() => setTab(name)}
-            className={`px-4 py-2 text-sm capitalize border-b-2 -mb-px ${
+            className={`px-4 py-2 text-sm border-b-2 -mb-px ${
               tab === name ? "border-pp-accent text-pp-accent font-medium" : "border-transparent text-slate-600"
             }`}
           >
-            {name}
+            {TAB_LABELS[name]}
           </button>
         ))}
       </div>
 
-      <div hidden={tab !== "summary"}>
+      <div hidden={tab !== "overview"}>
         <SummaryTab
           tabsId={tabsId}
           caseData={caseData}
@@ -504,8 +517,8 @@ export default function CasePage() {
           onTogglePermits={() => setShowAllPermits((value) => !value)}
         />
       </div>
-      <div hidden={tab !== "distribution"}>
-        <DistributionTab
+      <div hidden={tab !== "review"}>
+        <ReviewTab
           tabsId={tabsId}
           bundle={bundle}
           departmentRows={departmentRows}
@@ -520,41 +533,26 @@ export default function CasePage() {
               async () => {
                 await api.refreshDistribution(caseId);
               },
-              "Distribution queued on Cloud Tasks.",
+              "City records refresh queued.",
             )
-          }
-          onFleet={() =>
-            runAction("fleet", async () => {
-              await api.runFleet(caseId);
-            }, "Distribution queued on Cloud Tasks.")
-          }
-          onInterrupt={() =>
-            runAction("crash", async () => {
-              await api.interruptDistribution(caseId);
-            }, "Interrupt flagged. Remaining A2A hops will skip.")
-          }
-          onResume={() =>
-            runAction("resume", async () => {
-              await api.resumeDistribution(caseId);
-            }, "Resume queued. Completed specialists are skipped.")
           }
           onConfirmHitl={() =>
             runAction("hitl", async () => {
               await api.confirmHitl(caseId);
-            }, "HITL confirmed.")
+            }, "Draft recorded on the case file.")
           }
           onRejectHitl={() =>
             runAction("hitl-reject", async () => {
               await api.rejectHitl(caseId);
-            }, "Agent draft rejected. Case was not mutated.")
+            }, "Draft discarded. The case was not changed.")
           }
           onSelect={setSelected}
         />
       </div>
-      <div hidden={tab !== "documents"}>
+      <div hidden={tab !== "packet"}>
         <DocumentsTab tabsId={tabsId} bundle={bundle} planUrl={planUrl} />
       </div>
-      <div hidden={tab !== "claims"}>
+      <div hidden={tab !== "applicant"}>
         <ClaimsTab
           tabsId={tabsId}
           bundle={bundle}
@@ -597,7 +595,27 @@ export default function CasePage() {
           }}
         />
       </div>
-      <div hidden={tab !== "audit"}>
+      <div hidden={tab !== "history"}>
+        <TechnicalHistoryControls
+          bundle={bundle}
+          canDecide={canDecide}
+          busy={busy}
+          onFleet={() =>
+            runAction("fleet", async () => {
+              await api.runFleet(caseId);
+            }, "Specialist re-run queued.")
+          }
+          onInterrupt={() =>
+            runAction("crash", async () => {
+              await api.interruptDistribution(caseId);
+            }, "Remaining work paused.")
+          }
+          onResume={() =>
+            runAction("resume", async () => {
+              await api.resumeDistribution(caseId);
+            }, "Resume queued. Finished departments are skipped.")
+          }
+        />
         <AuditTab
           tabsId={tabsId}
           bundle={bundle}
@@ -608,14 +626,32 @@ export default function CasePage() {
 
       <ModalDialog
         open={Boolean(selected)}
-        title={selected ? `${selected.department} review` : "Department review"}
+        title={selected ? `${departmentLabel(selected.department)} review` : "Department review"}
         onClose={() => setSelected(null)}
         variant="drawer"
       >
         {selected && (
           <div className="space-y-4">
             <StatusBadge status={selected.status} />
+            {generatedByHint(selected.generated_by) ? (
+              <p className="text-sm text-slate-600">{generatedByHint(selected.generated_by)}</p>
+            ) : null}
             <p className="text-sm text-slate-700">{selected.summary}</p>
+            {(selected.objections ?? []).length > 0 && (
+              <div>
+                <h3 className="text-sm font-medium">Objections</h3>
+                <ol className="mt-2 text-sm space-y-2">
+                  {selected.objections?.map((item) => (
+                    <li key={item.obj_no} className="border border-pp-border rounded-xl p-2">
+                      <p className="font-medium">
+                        Obj {item.obj_no} · {item.code || "uncited"}
+                      </p>
+                      <p className="text-slate-600">{item.description}</p>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            )}
             <div>
               <h3 className="text-sm font-medium">Findings</h3>
               <ul className="mt-2 text-sm list-disc pl-5 space-y-1">
@@ -633,8 +669,8 @@ export default function CasePage() {
               <ul className="mt-2 text-sm space-y-2">
                 {selected.evidence.map((ev) => (
                   <li key={`${ev.dataset_id}-${ev.label}`} className="border border-pp-border rounded-xl p-2">
-                    <span className="text-slate-500">{ev.dataset_id}</span> · {ev.label}:{" "}
-                    <strong>{String(ev.value)}</strong>
+                    <span className="text-slate-500">{ev.label}</span>: <strong>{String(ev.value)}</strong>
+                    <p className="text-xs text-slate-500 mt-1">{ev.dataset_id}</p>
                   </li>
                 ))}
               </ul>

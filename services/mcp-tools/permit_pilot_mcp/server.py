@@ -14,7 +14,7 @@ from permit_pilot_core.distribution.evidence import EvidenceClient
 from permit_pilot_core.distribution.ordinance import get_section, search_ordinance
 from permit_pilot_core.distribution.routing import plan_departments
 from permit_pilot_core.firestore.store import FirestoreStore
-from permit_pilot_core.models import Citation, Department, DepartmentReview, EvidenceItem, ReviewStatus
+from permit_pilot_core.models import Citation, Department, DepartmentReview, EvidenceItem, ObjectionItem, ReviewStatus
 from permit_pilot_core.settings import get_settings
 
 mcp = MCPServer(
@@ -51,8 +51,8 @@ async def lookup_dob_permits(bbl: str, bin: str = "", case_id: str = "") -> dict
 
 @mcp.tool()
 async def lookup_dob_violations(bin: str, bbl: str = "", case_id: str = "") -> dict[str, Any]:
-    """Fetch raw DOB violation rows and active_violation_count. Does not decide PASS/FAIL."""
-    payload = await _evidence.lookup_dob_violations(bin)
+    """Fetch raw DOB violation rows with descriptions. Counts are context, not a verdict."""
+    payload = await _evidence.lookup_dob_violations(bin, bbl=bbl)
     payload["bbl"] = bbl
     payload["case_id"] = case_id
     return payload
@@ -67,9 +67,9 @@ async def lookup_fdny_violations(bin: str, case_id: str = "") -> dict[str, Any]:
 
 
 @mcp.tool()
-async def lookup_hpd_violations(bin: str, case_id: str = "") -> dict[str, Any]:
-    """Fetch raw HPD violation rows and class counts. Does not decide PASS/FAIL."""
-    payload = await _evidence.lookup_hpd_violations(bin)
+async def lookup_hpd_violations(bin: str, case_id: str = "", bbl: str = "") -> dict[str, Any]:
+    """Fetch raw HPD violation rows by BBL (block/lot) and optional BIN. Does not decide PASS/FAIL."""
+    payload = await _evidence.lookup_hpd_violations(bin, bbl=bbl)
     payload["case_id"] = case_id
     return payload
 
@@ -154,12 +154,14 @@ async def persist_review(
     findings_json: str = "[]",
     evidence_json: str = "[]",
     citations_json: str = "[]",
+    objections_json: str = "[]",
     generated_by: str = "",
 ) -> dict[str, Any]:
     """Persist a department review onto the case file in Firestore."""
     findings = json.loads(findings_json) if findings_json else []
     evidence_raw = json.loads(evidence_json) if evidence_json else []
     citations_raw = json.loads(citations_json) if citations_json else []
+    objections_raw = json.loads(objections_json) if objections_json else []
     review = DepartmentReview(
         department=Department(department),
         status=ReviewStatus(status),
@@ -167,6 +169,7 @@ async def persist_review(
         findings=list(findings),
         evidence=[EvidenceItem.model_validate(item) for item in evidence_raw],
         citations=[Citation.model_validate(item) for item in citations_raw],
+        objections=[ObjectionItem.model_validate(item) for item in objections_raw],
         updated_at=_now(),
         generated_by=generated_by or department,
         model=get_settings().vertex_model,

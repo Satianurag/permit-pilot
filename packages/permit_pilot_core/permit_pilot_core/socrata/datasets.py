@@ -10,6 +10,7 @@ def __getattr__(name: str) -> str:
         "PERMITS": settings.nyc_dataset_permits,
         "FILINGS": settings.nyc_dataset_filings,
         "DOB_VIOLATIONS": settings.nyc_dataset_dob_violations,
+        "DOB_SAFETY": settings.nyc_dataset_dob_safety,
         "DEP_ECB": settings.nyc_dataset_dep_ecb,
         "LANDMARKS": settings.nyc_dataset_landmarks,
         "FDNY_VIOLATIONS": settings.nyc_dataset_fdny_violations,

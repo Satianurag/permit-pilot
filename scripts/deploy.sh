@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+if [ -f "${ROOT}/.cloud-deploy.env" ]; then
+  # shellcheck disable=SC1091
+  source "${ROOT}/.cloud-deploy.env"
+fi
 PROJECT="${GOOGLE_CLOUD_PROJECT:?Set GOOGLE_CLOUD_PROJECT}"
 REGION="${GOOGLE_CLOUD_LOCATION:-us-central1}"
 VERTEX_LOCATION="${VERTEX_LOCATION:-global}"
@@ -50,6 +54,9 @@ ENV_FILE="$(mktemp)"
   if [ -n "${AGENT_ENGINE_IDS:-}" ]; then
     echo "AGENT_ENGINE_IDS: '${AGENT_ENGINE_IDS}'"
   fi
+  if [ -n "${GOOGLE_SIGNIN_CLIENT_ID:-}" ]; then
+    echo "GOOGLE_SIGNIN_CLIENT_ID: '${GOOGLE_SIGNIN_CLIENT_ID}'"
+  fi
   if [ -n "${MCP_TOOLS_URL:-}" ]; then
     echo "MCP_TOOLS_URL: '${MCP_TOOLS_URL}'"
   fi
@@ -72,9 +79,13 @@ gcloud run deploy "$SERVICE" \
 rm -f "$ENV_FILE"
 
 URL="$(gcloud run services describe "$SERVICE" --region="$REGION" --format='value(status.url)')"
+UPDATE_VARS="PERMIT_PILOT_URL=${URL},CORS_ORIGINS=${URL}"
+if [ -n "${MCP_TOOLS_URL:-}" ]; then
+  UPDATE_VARS="${UPDATE_VARS},MCP_TOOLS_URL=${MCP_TOOLS_URL}"
+fi
 gcloud run services update "$SERVICE" \
   --region="$REGION" \
-  --update-env-vars "PERMIT_PILOT_URL=${URL},CORS_ORIGINS=${URL}" >/dev/null
+  --update-env-vars "${UPDATE_VARS}" >/dev/null
 
 gcloud run services add-iam-policy-binding "$SERVICE" \
   --region="$REGION" \

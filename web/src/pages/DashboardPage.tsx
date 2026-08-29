@@ -78,27 +78,27 @@ export default function DashboardPage() {
               label="Open reviews"
               value={summary.open_tasks}
               meta={`${summary.my_tasks} assigned to you`}
-              href="/tasks"
+              href="/work"
             />
             <StatCard
               label="Overdue on review clock"
               value={summary.overdue_tasks}
               meta="5-day internal target"
-              href="/tasks"
+              href="/work"
               tone={summary.overdue_tasks > 0 ? "danger" : "default"}
             />
             <StatCard
               label="Awaiting applicant"
               value={summary.awaiting_applicant}
               meta={`${summary.awaiting_clerk} back with clerk`}
-              href="/permits?status=awaiting_applicant"
+              href="/find?status=awaiting_applicant"
               tone={summary.awaiting_applicant > 0 ? "warn" : "default"}
             />
             <StatCard
               label="Unassigned work"
               value={summary.unassigned_tasks}
               meta={`${summary.in_review} in active review`}
-              href="/tasks?assign=unassigned"
+              href="/work?assign=unassigned"
               tone={summary.unassigned_tasks > 0 ? "warn" : "default"}
             />
           </div>
@@ -114,7 +114,7 @@ export default function DashboardPage() {
               className="xl:col-span-2"
               action={
                 summary.alerts.length > 0 ? (
-                  <Link to="/tasks" className="text-sm font-medium text-pp-accent hover:underline">
+                  <Link to="/work" className="text-sm font-medium text-pp-accent hover:underline">
                     Open task queue
                   </Link>
                 ) : undefined
@@ -127,7 +127,7 @@ export default function DashboardPage() {
           <div className="grid gap-4 xl:grid-cols-3">
             <Panel title="Case pipeline" subtitle="Dossiers by status — click a bar to filter search.">
               <CaseStatusChart casesByStatus={summary.cases_by_status} />
-              <Link to="/permits" className="pp-btn-secondary w-full mt-4 text-center">
+              <Link to="/find" className="pp-btn-secondary w-full mt-4 text-center">
                 Search all permits
               </Link>
             </Panel>
@@ -157,10 +157,10 @@ export default function DashboardPage() {
               </li>
             </ul>
             <div className="mt-4 flex flex-wrap gap-3">
-              <Link to="/activity" className="pp-btn-secondary">
+              <Link to="/more/activity" className="pp-btn-secondary">
                 View audit activity feed
               </Link>
-              <Link to="/tasks" className="pp-btn-secondary">
+              <Link to="/work" className="pp-btn-secondary">
                 Open full task queue
               </Link>
             </div>

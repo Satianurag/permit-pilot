@@ -171,7 +171,7 @@ export default function IntakeModal({ open, onClose, onCreated }: Props) {
       onClose();
       onCreated?.();
       await invalidate(created.id);
-      navigate(`/cases/${created.id}?tab=distribution&from=tasks`);
+      navigate(`/cases/${created.id}?tab=review&from=work`);
     } catch (err) {
       setError(errorMessage(err));
     } finally {

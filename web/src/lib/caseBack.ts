@@ -1,12 +1,15 @@
 export function caseBackTarget(from: string | null): { to: string; label: string } {
   switch (from) {
     case "search":
-      return { to: "/permits", label: "permit search" };
+    case "find":
+      return { to: "/find", label: "Find a case" };
     case "activity":
-      return { to: "/activity", label: "activity" };
+      return { to: "/more/history", label: "history" };
     case "dashboard":
-      return { to: "/dashboard", label: "dashboard" };
+    case "work":
+    case "tasks":
+      return { to: "/work", label: "My work" };
     default:
-      return { to: "/tasks", label: "tasks" };
+      return { to: "/work", label: "My work" };
   }
 }

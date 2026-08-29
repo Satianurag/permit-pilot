@@ -6,9 +6,9 @@ CORE_PY="$ROOT/packages/permit_pilot_core/.venv/bin/python"
 ORCH_ADK="$ROOT/services/orchestrator/.venv/bin/adk"
 cd "$ROOT/packages/permit_pilot_core"
 if [ -x "$CORE_PY" ]; then
-  "$CORE_PY" -m unittest tests.test_eval_bbls tests.test_agentic_policy tests.test_fleet_catalog tests.test_parcel tests.test_identity
+  "$CORE_PY" -m unittest tests.test_eval_bbls tests.test_agentic_policy tests.test_fleet_catalog tests.test_engine_fallback tests.test_parcel tests.test_identity
 else
-  python3 -m unittest tests.test_eval_bbls tests.test_agentic_policy tests.test_fleet_catalog tests.test_parcel tests.test_identity
+  python3 -m unittest tests.test_eval_bbls tests.test_agentic_policy tests.test_fleet_catalog tests.test_engine_fallback tests.test_parcel tests.test_identity
 fi
 if [ -x "$ORCH_ADK" ]; then
   echo "=== adk eval (orchestrator coordinator) ==="

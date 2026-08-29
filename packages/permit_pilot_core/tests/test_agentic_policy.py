@@ -63,6 +63,12 @@ class RoutingPlanTest(unittest.TestCase):
         self.assertEqual(plan["departments"], [])
         self.assertFalse(plan["include_critic"])
 
+    def test_missing_bin_skips_fire_keeps_housing(self) -> None:
+        plan = plan_departments(work_type="Alteration", bin_="", pluto={"facts": {"histdist": ""}})
+        self.assertNotIn("fire", plan["departments"])
+        self.assertIn("housing", plan["departments"])
+        self.assertIn("Fire review needs a building identification number", plan["skipped"]["fire"])
+
 
 class CompletenessTest(unittest.TestCase):
     def test_missing_bin_is_incomplete(self) -> None:
@@ -90,7 +96,7 @@ class CriticPolicyTest(unittest.TestCase):
         critic = review_critic([_review()])
         self.assertEqual(critic.status, ReviewStatus.FAIL)
 
-    def test_contradiction_pass_with_active_violations(self) -> None:
+    def test_pass_with_active_violations_is_allowed(self) -> None:
         critic = review_critic(
             [
                 _review(
@@ -100,7 +106,7 @@ class CriticPolicyTest(unittest.TestCase):
                     evidence=[
                         EvidenceItem(
                             source="NYC Open Data",
-                            dataset_id="3h2n-5cm9",
+                            dataset_id="855j-jady",
                             label="active_violation_count",
                             value=12,
                         )
@@ -108,8 +114,23 @@ class CriticPolicyTest(unittest.TestCase):
                 )
             ]
         )
+        self.assertEqual(critic.status, ReviewStatus.PASS)
+
+    def test_uncited_open_objection_is_rejected(self) -> None:
+        from permit_pilot_core.models import ObjectionItem
+
+        critic = review_critic(
+            [
+                _review(
+                    status=ReviewStatus.FAIL,
+                    summary="objection",
+                    citations=[Citation(code="1 RCNY 101-07", excerpt="x")],
+                    evidence=[EvidenceItem(source="NYC Open Data", dataset_id="x", label="n", value=1)],
+                    objections=[ObjectionItem(obj_no=1, department="building", code="", description="Uncited row")],
+                )
+            ]
+        )
         self.assertEqual(critic.status, ReviewStatus.FAIL)
-        self.assertIn("contradict", critic.summary.lower())
 
     def test_unknown_code_is_rejected(self) -> None:
         critic = review_critic(
@@ -173,8 +194,8 @@ class CriticRerouteTest(unittest.TestCase):
 
         critic = _review(
             department=Department.CRITIC,
-            summary="Rejected PASS that contradicts live evidence counts.",
-            findings=["building: PASS with active_violation_count=12"],
+            summary="Rejected 1 review(s) without citations: building.",
+            findings=["Departments: building"],
         )
         self.assertEqual(critic_offenders(critic), ["building"])
 

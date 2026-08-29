@@ -96,6 +96,7 @@ class LiveEvidenceAndRouting(unittest.IsolatedAsyncioTestCase):
         )
         self.assertNotIn("landmarks", plan["departments"])
         self.assertIn("landmarks", plan["skipped"])
+        self.assertIn("historic district", plan["skipped"]["landmarks"].lower())
 
     async def test_parsons_demolition_routes_building_and_landmarks(self) -> None:
         plan = plan_departments(
@@ -108,6 +109,54 @@ class LiveEvidenceAndRouting(unittest.IsolatedAsyncioTestCase):
         building = fleet_by_name()["building_agent"]
         self.assertIn("lookup_dob_violations", building.tools)
         self.assertIn("persist_review", building.tools)
+
+    async def test_parsons_safety_dataset_returns_descriptions(self) -> None:
+        from permit_pilot_core.distribution.evidence import EvidenceClient
+
+        try:
+            payload = await EvidenceClient().lookup_dob_violations("4117367", bbl="4051980021")
+        except Exception:
+            self.skipTest("NYC Open Data unreachable")
+            return
+        self.assertNotIn("status", payload)
+        self.assertIn(payload["dataset_id"], {"855j-jady", "3h2n-5cm9"})
+        if payload["rows"]:
+            row = payload["rows"][0]
+            self.assertTrue(
+                row.get("description") or row.get("violation_type") or row.get("violation_category"),
+                f"Expected a description field on {row}",
+            )
+
+    async def test_fdny_lookup_is_labeled_historical(self) -> None:
+        from permit_pilot_core.distribution.evidence import EvidenceClient
+
+        try:
+            payload = await EvidenceClient().lookup_fdny_violations("4117367")
+        except Exception:
+            self.skipTest("NYC Open Data unreachable")
+            return
+        self.assertIn("2017", str(payload.get("note") or ""))
+        self.assertTrue((payload.get("facts") or {}).get("dataset_stale"))
+
+    async def test_dep_ecb_dataset_hits_seed_addresses(self) -> None:
+        import httpx
+
+        try:
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                current = await client.get(
+                    "https://data.cityofnewyork.us/resource/skr7-cxt3.json",
+                    params={"$limit": "1"},
+                )
+                current.raise_for_status()
+                alt = await client.get(
+                    "https://data.cityofnewyork.us/resource/6bgk-3dad.json",
+                    params={"$limit": "1"},
+                )
+        except Exception:
+            self.skipTest("NYC Open Data unreachable")
+            return
+        self.assertTrue(current.json(), "skr7-cxt3 returned no rows")
+        self.assertEqual(alt.status_code, 200)
 
 
 if __name__ == "__main__":

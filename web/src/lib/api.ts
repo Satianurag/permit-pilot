@@ -34,6 +34,16 @@ export interface EvidenceItem {
   value: unknown;
 }
 
+export interface ObjectionItem {
+  obj_no: number;
+  department: string;
+  code: string;
+  description: string;
+  recommended_fix?: string;
+  status: "open" | "new" | "resolved" | "withdrawn";
+  generated_by?: string;
+}
+
 export interface DepartmentReview {
   department: string;
   status: ReviewStatus;
@@ -41,6 +51,7 @@ export interface DepartmentReview {
   findings: string[];
   evidence: EvidenceItem[];
   citations: { code: string; excerpt: string; source_url?: string | null }[];
+  objections?: ObjectionItem[];
   updated_at: string;
   generated_by?: string;
   model?: string;
@@ -336,6 +347,20 @@ async function post<T>(path: string, body?: unknown): Promise<T> {
 }
 
 export const api = {
+  googleClient: () =>
+    fetch(`${apiBase()}/auth/google-client`).then(async (res) => {
+      if (!res.ok) throw new Error(await parseApiError(res));
+      return res.json() as Promise<{ client_id: string }>;
+    }),
+  loginGoogle: async (credential: string) => {
+    const res = await fetch(`${apiBase()}/auth/google`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ credential }),
+    });
+    if (!res.ok) throw new Error(await parseApiError(res));
+    return res.json() as Promise<{ access_token: string; token_type: string }>;
+  },
   login: async (username: string, password: string) => {
     const body = new URLSearchParams({ username, password });
     const res = await fetch(`${apiBase()}/auth/token`, {

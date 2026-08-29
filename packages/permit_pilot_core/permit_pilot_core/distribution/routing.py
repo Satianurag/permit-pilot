@@ -50,17 +50,17 @@ def plan_departments(
 
     selected: list[str] = [Department.ZONING.value, Department.BUILDING.value, Department.UTILITIES.value]
 
+    selected.append(Department.HOUSING.value)
     if bin_.strip():
-        selected.extend([Department.FIRE.value, Department.HOUSING.value])
+        selected.append(Department.FIRE.value)
     else:
-        skipped[Department.FIRE.value] = "BIN required for FDNY lookup."
-        skipped[Department.HOUSING.value] = "BIN required for HPD lookup."
+        skipped[Department.FIRE.value] = "Fire review needs a building identification number (BIN)."
 
     if demolition or in_landmark or memory_landmark:
         selected.append(Department.LANDMARKS.value)
     elif plumbing and not in_landmark and not memory_landmark:
         skipped[Department.LANDMARKS.value] = (
-            "Plumbing work with empty PLUTO histdist and no landmark memory — LPC not in routing plan."
+            "Landmarks not needed: this plumbing job is not in a historic district."
         )
     else:
         selected.append(Department.LANDMARKS.value)

@@ -20,6 +20,13 @@ TOKEN=$(curl -fsS -X POST "$BASE/api/auth/token" \
   -d "username=${USER}&password=${PASS}" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
 AUTH=(-H "Authorization: Bearer $TOKEN")
 
+if [ -n "${GOOGLE_SIGNIN_CLIENT_ID:-}" ]; then
+  echo "=== 0b. Google Sign-In client ==="
+  CLIENT_ID=$(curl -fsS "$BASE/api/auth/google-client" | python3 -c "import sys,json; print(json.load(sys.stdin).get('client_id',''))")
+  test -n "$CLIENT_ID"
+  test "$CLIENT_ID" = "$GOOGLE_SIGNIN_CLIENT_ID"
+fi
+
 echo "=== 1. Health ==="
 curl -fsS "$BASE/api/health" | grep -q ok
 

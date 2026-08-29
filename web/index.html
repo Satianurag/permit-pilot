@@ -42,12 +42,12 @@
             <span class="pp-eyebrow-dot"></span>
             NYC Department of Buildings · Clerk layer above DOB NOW
           </div>
-          <h1>Maria’s queue.<br />Seven agencies.<br />One case file.</h1>
+          <h1>One queue.<br />Numbered objections.<br />You still decide.</h1>
           <p class="pp-hero-lead">
-            Maria is a Queens plan examiner. Fifty packets a week, seven agencies, no single inbox.
-            Permit Pilot is the clerk layer above DOB NOW — it does not replace it. A coordinator
-            writes a routing plan, delegates only the specialists who apply, and pauses for Maria
-            to send claims or record decisions.
+            Maria is a Queens plan examiner. Packets land incomplete, sister agencies are not in her inbox,
+            and DOB NOW does not draft the first-review objection sheet. Permit Pilot sits above DOB NOW:
+            it checks the packet, pulls live city records, and pauses for Maria to confirm what the applicant
+            should fix.
           </p>
           <div class="pp-hero-actions">
             <a href="/login" class="pp-btn pp-btn-primary">Open clerk app</a>
@@ -63,23 +63,19 @@
             <div class="pp-mock">
               <div class="pp-mock-bar">
                 <div class="pp-mock-dots"><span></span><span></span><span></span></div>
-                <div class="pp-mock-title">761 Macon Street — Distribution</div>
+                <div class="pp-mock-title">761 Macon Street — Review</div>
               </div>
               <div class="pp-mock-body">
                 <div class="pp-mock-tabs">
-                  <span>Summary</span>
-                  <span class="is-on">Distribution</span>
-                  <span>Documents</span>
-                  <span>Claims</span>
-                  <span>Audit</span>
+                  <span>Overview</span>
+                  <span class="is-on">Review</span>
+                  <span>Packet</span>
+                  <span>Applicant</span>
+                  <span>History</span>
                 </div>
-                <div class="pp-dept-row"><span class="pp-dept-name">Zoning</span><span class="pp-dept-meta">PLUTO</span><span class="pp-badge pp-badge--pass">Pass</span></div>
-                <div class="pp-dept-row"><span class="pp-dept-name">Building</span><span class="pp-dept-meta">DOB</span><span class="pp-badge pp-badge--fail">Active violations</span></div>
-                <div class="pp-dept-row"><span class="pp-dept-name">Fire</span><span class="pp-dept-meta">FDNY</span><span class="pp-badge pp-badge--pass">Pass</span></div>
-                <div class="pp-dept-row"><span class="pp-dept-name">Utilities</span><span class="pp-dept-meta">DEP</span><span class="pp-badge pp-badge--info">ECB</span></div>
-                <div class="pp-dept-row"><span class="pp-dept-name">Landmarks</span><span class="pp-dept-meta">LPC</span><span class="pp-badge pp-badge--skip">Skipped — empty histdist</span></div>
-                <div class="pp-dept-row"><span class="pp-dept-name">Housing</span><span class="pp-dept-meta">HPD</span><span class="pp-badge pp-badge--pass">Pass</span></div>
-                <div class="pp-dept-row"><span class="pp-dept-name">Critic</span><span class="pp-dept-meta">Review</span><span class="pp-badge pp-badge--pass">Valid</span></div>
+                <div class="pp-dept-row"><span class="pp-dept-name">Obj 1</span><span class="pp-dept-meta">1 RCNY 101-07</span><span class="pp-badge pp-badge--fail">Plumbing riser</span></div>
+                <div class="pp-dept-row"><span class="pp-dept-name">Landmarks</span><span class="pp-dept-meta">Not needed</span><span class="pp-badge pp-badge--skip">Not a historic district</span></div>
+                <div class="pp-dept-row"><span class="pp-dept-name">Next</span><span class="pp-dept-meta">Needs you</span><span class="pp-badge pp-badge--info">Confirm request</span></div>
               </div>
             </div>
           </div>
@@ -107,9 +103,9 @@
         <div class="pp-evidence-grid">
           <article class="pp-evidence-card">
             <span class="pp-evidence-dept">Building</span>
-            <p class="pp-evidence-value">Active DOB violations on BIN</p>
-            <span class="pp-evidence-source">NYC Open Data · DOB violations</span>
-            <span class="pp-badge pp-badge--fail">Fail</span>
+            <p class="pp-evidence-value">Violation descriptions from city records — not an automatic fail</p>
+            <span class="pp-evidence-source">NYC Open Data · DOB safety violations</span>
+            <span class="pp-badge pp-badge--info">Context</span>
           </article>
           <article class="pp-evidence-card">
             <span class="pp-evidence-dept">Zoning</span>
@@ -136,8 +132,8 @@
     <!-- Department pipeline -->
     <section class="pp-pipeline-section">
       <div class="pp-section-head pp-reveal">
-        <h2>Seven department agents, one parallel distribution run</h2>
-        <p>Zoning through Housing write reviews to the same case file. The Critic validates citations before the clerk decides.</p>
+        <h2>Sister-agency specialists, one examiner sheet</h2>
+        <p>Zoning through Housing attach city records to the same case. They draft numbered objections when the work warrants it. You still confirm what goes to the applicant.</p>
       </div>
       <div class="pp-pipeline pp-reveal">
         <div class="pp-pipeline-item"><strong>Zoning</strong><span class="pp-tag">PLUTO</span><span>Parcel zoning district &amp; land use</span></div>
@@ -315,10 +311,8 @@
         <span>© 2026 Permit Pilot · All Things Agentic · Fortified Enterprise Fleet</span>
         <div class="pp-footer-links">
           <button type="button" class="pp-footer-cookie" id="pp-cookie-reopen">Cookie settings</button>
-          <a href="/dashboard">Dashboard</a>
-          <a href="/activity">Activity</a>
-          <a href="/tasks">Task inbox</a>
-          <a href="/permits">Permit search</a>
+          <a href="/work">My work</a>
+          <a href="/find">Find a case</a>
           <a href="/login">Sign in</a>
         </div>
       </div>

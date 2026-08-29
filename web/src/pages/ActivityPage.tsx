@@ -92,7 +92,7 @@ export default function ActivityPage() {
                 Clear filter
               </button>
             ) : (
-              <Link to="/tasks" className="pp-btn-primary">
+              <Link to="/work" className="pp-btn-primary">
                 Open task queue
               </Link>
             )

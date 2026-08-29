@@ -50,6 +50,12 @@ class FleetCatalogTest(unittest.TestCase):
         self.assertIn("get_ordinance_section", critic.tools)
         self.assertIn("persist_review", critic.tools)
 
+    def test_specialists_do_not_fail_on_counts(self) -> None:
+        for name in ("building_agent", "fire_agent", "utilities_agent", "housing_agent"):
+            instruction = fleet_by_name()[name].instruction.lower()
+            self.assertNotIn("fail when", instruction)
+            self.assertIn("not automatic fail", instruction)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -49,6 +49,8 @@ def _init_steps() -> list[DepartmentStep]:
 
 
 async def ensure_seeded(store: FirestoreStore, engine: DistributionEngine) -> None:
+    from permit_pilot_core.fleet_runner import run_distribution
+
     socrata = SocrataClient()
     existing = {c.bbl: c for c in store.list_cases()}
     bootstrap_clerk = get_settings().clerk_bootstrap_username
@@ -56,9 +58,11 @@ async def ensure_seeded(store: FirestoreStore, engine: DistributionEngine) -> No
     for payload in REAL_NYC_CASES:
         resolved = await resolve_parcel(payload, socrata)
         case = existing.get(resolved.bbl)
+        created = False
         if case is None:
             case = store.create_case(resolved)
             existing[resolved.bbl] = case
+            created = True
             store.append_audit(
                 case.id,
                 actor="system",
@@ -66,26 +70,9 @@ async def ensure_seeded(store: FirestoreStore, engine: DistributionEngine) -> No
                 detail=f"Case created for BBL {case.bbl} with live NYC Open Data keys.",
             )
 
-        store.save_workflow_steps(case.id, _init_steps())
-        reviews = await engine.run_all(bbl=case.bbl, bin_=case.bin, work_type=case.work_type)
-        store.save_distribution(case.id, reviews)
-        steps = []
-        for review in reviews:
-            steps.append(
-                DepartmentStep(
-                    name="distribution",
-                    department=review.department,
-                    status="completed",
-                    detail=review.summary,
-                )
-            )
-        store.save_workflow_steps(case.id, steps)
-        store.append_audit(
-            case.id,
-            actor="system",
-            action="distribution_refreshed",
-            detail=f"Seeded live NYC Open Data reviews for {len(reviews)} departments",
-        )
+        if created or not store.list_distribution(case.id):
+            store.save_workflow_steps(case.id, _init_steps())
+            await run_distribution(store, engine, case_id=case.id, user_id="system", reason="seed")
 
         open_tasks = store.list_tasks(case.id, status="open")
         if not open_tasks:

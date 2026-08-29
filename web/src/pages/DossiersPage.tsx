@@ -59,8 +59,8 @@ export default function DossiersPage() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Permit search"
-        subtitle="Find a dossier by address, BBL, BIN, owner, or status. Search waits 300ms after you stop typing."
+        title="Find a case"
+        subtitle="Search by address, BBL, BIN, owner, or status. Search waits 300ms after you stop typing."
       />
 
       <div className="pp-panel max-w-4xl">
@@ -115,7 +115,7 @@ export default function DossiersPage() {
                   <td>
                     <Link
                       className="text-pp-accent font-medium hover:underline after:absolute after:inset-0"
-                      to={`/cases/${item.id}?from=search`}
+                      to={`/cases/${item.id}?tab=review&from=find`}
                     >
                       {item.address}
                     </Link>

@@ -2,7 +2,6 @@ import { useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import EmptyState from "../components/EmptyState";
-import IntakeModal from "../components/IntakeModal";
 import PageHeader from "../components/PageHeader";
 import Skeleton from "../components/Skeleton";
 import { StatusBadge } from "../components/StatusBadge";
@@ -10,6 +9,7 @@ import { useToast } from "../components/Toast";
 import { api, Task } from "../lib/api";
 import { errorMessage } from "../lib/errors";
 import { formatStatus } from "../lib/formatStatus";
+import { HINT_STORAGE_KEY } from "../lib/clerkLanguage";
 import { getStoredUser } from "../lib/auth";
 import { clockClass, reviewClock } from "../lib/reviewClock";
 import { useInvalidateCase } from "../lib/useCaseBundle";
@@ -36,7 +36,13 @@ export default function TasksPage() {
   const rawAssign = params.get("assign");
   const assignFilter: (typeof ASSIGN_FILTERS)[number]["id"] =
     rawAssign === "mine" || rawAssign === "unassigned" ? rawAssign : "all";
-  const [intakeOpen, setIntakeOpen] = useState(false);
+  const [hintVisible, setHintVisible] = useState(() => {
+    try {
+      return sessionStorage.getItem(HINT_STORAGE_KEY) !== "1";
+    } catch {
+      return true;
+    }
+  });
   const currentUser = getStoredUser();
   const query = useQuery({
     queryKey: ["tasks", filter, assignFilter],
@@ -79,14 +85,37 @@ export default function TasksPage() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="My Tasks"
-        subtitle="Oldest review clock first. Open a row to land on Distribution — the work, not the cover sheet."
+        title="My work"
+        subtitle="Oldest review clock first. Open a row to land on Review — the objection sheet, not a dashboard."
         action={
-          <button type="button" onClick={() => setIntakeOpen(true)} className="pp-btn-primary">
+          <Link to="/intake" className="pp-btn-primary">
             + New intake
-          </button>
+          </Link>
         }
       />
+
+      {hintVisible && (
+        <div className="rounded-xl border border-pp-border bg-white p-4 text-sm flex flex-wrap items-start justify-between gap-3">
+          <p className="text-slate-700">
+            Open a case, read the Review tab, and confirm anything that still needs you. This tool does not email the
+            applicant and does not replace DOB NOW.
+          </p>
+          <button
+            type="button"
+            className="text-sm text-pp-accent hover:underline shrink-0"
+            onClick={() => {
+              try {
+                sessionStorage.setItem(HINT_STORAGE_KEY, "1");
+              } catch {
+                /* private mode */
+              }
+              setHintVisible(false);
+            }}
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       <div className="flex flex-wrap items-center gap-3">
         <div className="pp-segment" role="group" aria-label="Task status">
@@ -132,9 +161,9 @@ export default function TasksPage() {
           title="No tasks in this view"
           description="When distribution reviews or applicant responses need attention, they will appear here."
           action={
-            <button type="button" onClick={() => setIntakeOpen(true)} className="pp-btn-primary">
+            <Link to="/intake" className="pp-btn-primary">
               Start new intake
-            </button>
+            </Link>
           }
         />
       ) : (
@@ -161,7 +190,7 @@ export default function TasksPage() {
                     <td>
                       <Link
                         className="text-pp-accent font-medium hover:underline after:absolute after:inset-0"
-                        to={`/cases/${task.case_id}?tab=distribution&from=tasks`}
+                        to={`/cases/${task.case_id}?tab=review&from=work`}
                       >
                         {task.title}
                       </Link>
@@ -193,7 +222,6 @@ export default function TasksPage() {
           </table>
         </div>
       )}
-      <IntakeModal open={intakeOpen} onClose={() => setIntakeOpen(false)} />
     </div>
   );
 }

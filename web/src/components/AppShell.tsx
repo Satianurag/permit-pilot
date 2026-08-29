@@ -1,38 +1,33 @@
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { Activity, ClipboardList, Home, MemoryStick, Search, Shield, ShipWheel, Waypoints } from "lucide-react";
+import { ClipboardList, MoreHorizontal, Search } from "lucide-react";
 import { clearSession, getStoredUser } from "../lib/auth";
 import { cn } from "../lib/cn";
 
 const NAV = [
-  { to: "/dashboard", label: "Home", short: "Home", icon: Home },
-  { to: "/tasks", label: "My Tasks", short: "Tasks", icon: ClipboardList },
-  { to: "/activity", label: "Activity", short: "Activity", icon: Activity },
-  { to: "/permits", label: "Permit search", short: "Search", icon: Search },
-  { to: "/agents", label: "Fleet", short: "Fleet", icon: ShipWheel },
-  { to: "/governance", label: "Governance", short: "Govern", icon: Shield },
-  { to: "/memory", label: "Parcel memory", short: "Memory", icon: MemoryStick },
-  { to: "/traces", label: "Traces", short: "Traces", icon: Waypoints },
+  { to: "/work", label: "My work", short: "Work", icon: ClipboardList },
+  { to: "/find", label: "Find a case", short: "Find", icon: Search },
+  { to: "/more", label: "More", short: "More", icon: MoreHorizontal },
 ] as const;
 
 const TOPBAR_COPY: Record<string, { kicker: string; title: string }> = {
-  "/dashboard": { kicker: "Clerk workspace", title: "Home · overview and alerts" },
-  "/tasks": { kicker: "Clerk workspace", title: "My tasks · review queue" },
-  "/activity": { kicker: "Clerk workspace", title: "Activity · audit feed" },
-  "/permits": { kicker: "Clerk workspace", title: "Permit search · dossier lookup" },
-  "/agents": { kicker: "Agent Platform", title: "Fleet · Agent Registry and SPIFFE identities" },
-  "/governance": { kicker: "Agent Platform", title: "Governance · gateway, IAP, Model Armor" },
-  "/memory": { kicker: "Agent Platform", title: "Parcel memory · Memory Bank by BBL" },
-  "/traces": { kicker: "Agent Platform", title: "Traces · Agent Observability and run history" },
+  "/work": { kicker: "Clerk workspace", title: "My work" },
+  "/find": { kicker: "Clerk workspace", title: "Find a case" },
+  "/intake": { kicker: "Clerk workspace", title: "New intake" },
+  "/more": { kicker: "Clerk workspace", title: "More" },
 };
 
 function topbarCopy(pathname: string) {
   if (pathname.startsWith("/cases/")) {
-    return { kicker: "Case file", title: "Review · distribution · audit trail" };
+    return { kicker: "Case file", title: "Review" };
   }
-  const match = NAV.find((item) =>
-    item.to === "/dashboard" ? pathname === "/dashboard" || pathname === "/" : pathname.startsWith(item.to),
-  );
-  return match ? TOPBAR_COPY[match.to] : TOPBAR_COPY["/dashboard"];
+  if (pathname.startsWith("/more")) {
+    return TOPBAR_COPY["/more"];
+  }
+  if (pathname.startsWith("/intake")) {
+    return TOPBAR_COPY["/intake"];
+  }
+  const match = NAV.find((item) => pathname === item.to || pathname.startsWith(`${item.to}/`));
+  return match ? TOPBAR_COPY[match.to] : TOPBAR_COPY["/work"];
 }
 
 export default function AppShell() {
@@ -47,7 +42,11 @@ export default function AppShell() {
   };
 
   const isActive = (path: string) =>
-    path === "/dashboard" ? pathname === "/dashboard" || pathname === "/" : pathname.startsWith(path);
+    path === "/work"
+      ? pathname === "/work" || pathname === "/"
+      : path === "/more"
+        ? pathname.startsWith("/more")
+        : pathname === path || pathname.startsWith(`${path}/`);
 
   return (
     <div className="pp-app-shell">
@@ -79,7 +78,7 @@ export default function AppShell() {
           {user && (
             <div className="mb-3 px-1">
               <p className="text-sm font-medium truncate">{user.full_name}</p>
-              <p className="text-xs text-blue-200/70 capitalize">{user.role.replace(/_/g, " ")}</p>
+              <p className="text-xs text-blue-200/70">Clerk</p>
             </div>
           )}
           <button type="button" onClick={signOut} className="pp-sidebar-link w-full text-left">
@@ -111,8 +110,8 @@ export default function AppShell() {
           </div>
           <div className="flex items-center gap-2 ml-auto shrink-0">
             {user && <span className="hidden sm:inline text-sm text-pp-muted truncate max-w-[12rem]">{user.full_name}</span>}
-            <Link to="/tasks" className="pp-btn-primary text-sm py-2">
-              Open queue
+            <Link to="/intake" className="pp-btn-primary text-sm py-2">
+              New intake
             </Link>
           </div>
         </header>

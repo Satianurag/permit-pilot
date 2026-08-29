@@ -26,7 +26,8 @@ def orchestrate_case_summary(case: Case, reviews: list[DepartmentReview]) -> str
         f"Work: {case.work_type}\n\n"
         f"Department distribution results:\n{dept_lines}\n\n"
         f"Write a concise 3-sentence clerk briefing: risks, blockers, and recommended next action. "
-        f"Only cite facts from the department results above."
+        f"Mention numbered objections if present. Only cite facts from the department results above. "
+        f"Do not mention agents, runtimes, or gateways."
     )
     inbound = sanitize_user_prompt(prompt)
     if inbound.blocked:

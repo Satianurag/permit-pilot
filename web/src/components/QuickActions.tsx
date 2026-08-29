@@ -19,7 +19,7 @@ export default function QuickActions({ onNewIntake }: Props) {
         </button>
       </li>
       <li>
-        <Link to="/tasks" className="pp-quick-action">
+        <Link to="/work" className="pp-quick-action">
           <span className="pp-quick-action-icon" aria-hidden>
             ☰
           </span>
@@ -30,7 +30,7 @@ export default function QuickActions({ onNewIntake }: Props) {
         </Link>
       </li>
       <li>
-        <Link to="/tasks?assign=mine" className="pp-quick-action">
+        <Link to="/work?assign=mine" className="pp-quick-action">
           <span className="pp-quick-action-icon" aria-hidden>
             ◉
           </span>
@@ -41,7 +41,7 @@ export default function QuickActions({ onNewIntake }: Props) {
         </Link>
       </li>
       <li>
-        <Link to="/permits" className="pp-quick-action">
+        <Link to="/find" className="pp-quick-action">
           <span className="pp-quick-action-icon" aria-hidden>
             ⌕
           </span>

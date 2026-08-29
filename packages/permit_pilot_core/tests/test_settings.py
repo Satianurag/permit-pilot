@@ -41,6 +41,7 @@ class SettingsContractTest(unittest.TestCase):
             self.assertEqual(settings.nyc_dataset_dep_ecb, "skr7-cxt3")
             self.assertEqual(ds.DEP_ECB, "skr7-cxt3")
             self.assertEqual(ds.PLUTO, "64uk-42ks")
+            self.assertEqual(ds.DOB_SAFETY, "855j-jady")
 
     def test_google_cloud_region_alias(self) -> None:
         from permit_pilot_core.settings import Settings, get_settings

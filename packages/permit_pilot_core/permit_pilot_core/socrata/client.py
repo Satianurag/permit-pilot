@@ -24,6 +24,14 @@ BOROUGH_FROM_CODE: dict[str, str] = {code: name.title() for name, code in BOROUG
 BOROUGH_FROM_CODE["STATEN ISLAND"] = "Staten Island"
 
 
+def split_bbl(bbl: str) -> tuple[str, str, str] | None:
+    """Return (borough, unpadded block, unpadded lot) from a 10-digit BBL."""
+    digits = "".join(ch for ch in bbl if ch.isdigit())
+    if len(digits) != 10:
+        return None
+    return digits[0], str(int(digits[1:6])), str(int(digits[6:10]))
+
+
 def borough_code(name: str) -> str:
     normalized = name.strip().upper()
     if normalized in BOROUGH_TO_CODE:
@@ -83,6 +91,21 @@ class SocrataClient:
             ds.DOB_VIOLATIONS,
             {"$where": f"bin='{bin_}'", "$limit": str(limit)},
         )
+
+    async def dob_safety_violations(self, *, bin_: str = "", bbl: str = "", limit: int = 100) -> list[dict[str, Any]]:
+        if bin_:
+            return await self._get(ds.DOB_SAFETY, {"$where": f"bin='{bin_}'", "$limit": str(limit)})
+        if bbl:
+            return await self._get(ds.DOB_SAFETY, {"$where": f"bbl='{bbl}'", "$limit": str(limit)})
+        return []
+
+    async def hpd_violations_by_bbl(self, bbl: str, limit: int = 50) -> list[dict[str, Any]]:
+        parts = split_bbl(bbl)
+        if not parts:
+            return []
+        boro, block, lot = parts
+        where = f"boroid='{boro}' AND block='{block}' AND lot='{lot}'"
+        return await self._get(ds.HPD_VIOLATIONS, {"$where": where, "$limit": str(limit)})
 
     async def landmarks_by_bbl(self, bbl: str, limit: int = 10) -> list[dict[str, Any]]:
         return await self._get(ds.LANDMARKS, {"$where": f"bbl='{bbl}'", "$limit": str(limit)})

@@ -15,7 +15,7 @@
             ]
           },
           "final_response": {
-            "parts": [{ "text": "Building FAIL: active DOB violations; cite 1 RCNY 101-07." }]
+            "parts": [{ "text": "Building review persisted after reading DOB violation descriptions." }]
           },
           "intermediate_data": {
             "tool_uses": [

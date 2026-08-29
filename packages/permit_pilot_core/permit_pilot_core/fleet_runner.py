@@ -82,7 +82,12 @@ def _resume_targets(store: FirestoreStore, case_id: str, planned: list[str], *, 
         targets: list[str] = []
         for name in planned:
             review = existing.get(name)
-            if review is None or review.status in {ReviewStatus.FAIL, ReviewStatus.NEEDS_INFO, ReviewStatus.CHECKING}:
+            open_work = bool(review and review.open_objections())
+            if (
+                review is None
+                or open_work
+                or review.status in {ReviewStatus.FAIL, ReviewStatus.NEEDS_INFO, ReviewStatus.CHECKING}
+            ):
                 targets.append(name)
         return targets
     return list(planned)
@@ -370,15 +375,34 @@ async def _critic_loop(
     return store.list_distribution(case.id)
 
 
+def _objection_claim_message(reviews: list[DepartmentReview]) -> str:
+    lines: list[str] = []
+    for item in reviews:
+        for obj in item.open_objections():
+            dept = obj.department or item.department.value
+            lines.append(f"Obj {obj.obj_no} | {obj.code} | {dept}: {obj.description}")
+            if obj.recommended_fix:
+                lines.append(f"    Recommended: {obj.recommended_fix}")
+    if lines:
+        return "Draft objections for the applicant (copy into DOB NOW — this tool does not notify them):\n" + "\n".join(
+            lines
+        )
+    failing = [item for item in reviews if item.status in {ReviewStatus.FAIL, ReviewStatus.NEEDS_INFO}]
+    if failing:
+        return "Needs your confirmation — " + "; ".join(
+            f"{item.department.value}: {item.summary}" for item in failing
+        )
+    return ""
+
+
 def _maybe_draft_hitl(store: FirestoreStore, case: Case, reviews: list[DepartmentReview]) -> None:
     if store.get_pending_hitl(case.id):
         return
     technical = [item for item in reviews if item.department != Department.CRITIC]
     if not technical:
         return
-    failing = [item for item in technical if item.status in {ReviewStatus.FAIL, ReviewStatus.NEEDS_INFO}]
-    if failing:
-        message = "Applicant package: " + "; ".join(f"{item.department.value}: {item.summary}" for item in failing)
+    message = _objection_claim_message(technical)
+    if message:
         store.save_pending_hitl(
             case.id,
             {"kind": "send_claim", "payload": {"message": message}, "confirmed": False},
@@ -389,7 +413,11 @@ def _maybe_draft_hitl(store: FirestoreStore, case: Case, reviews: list[Departmen
         case.id,
         {
             "kind": "record_decision",
-            "payload": {"decision": "approve", "note": "All technical departments PASS. Clerk confirmation required.", "override": False},
+            "payload": {
+                "decision": "approve",
+                "note": "All technical departments PASS with no open objections. Clerk confirmation required.",
+                "override": False,
+            },
             "confirmed": False,
         },
     )

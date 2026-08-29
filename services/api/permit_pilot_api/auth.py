@@ -54,7 +54,13 @@ def clerk_users() -> dict[str, ClerkUserInDB]:
     return _USERS
 
 
+def clerk_users_or_empty() -> dict[str, ClerkUserInDB]:
+    return dict(_USERS)
+
+
 def verify_password(plain_password: str, hashed_password: str) -> bool:
+    if hashed_password.startswith("oauth:"):
+        return False
     return password_hash.verify(plain_password, hashed_password)
 
 
@@ -62,6 +68,9 @@ def authenticate_user(username: str, password: str) -> ClerkUserInDB | None:
     users = clerk_users()
     user = users.get(username)
     if not user:
+        verify_password(password, _dummy_hash)
+        return None
+    if user.hashed_password.startswith("oauth:"):
         verify_password(password, _dummy_hash)
         return None
     if not verify_password(password, user.hashed_password):
@@ -89,7 +98,11 @@ async def get_current_user(token: Annotated[str, Depends(oauth2_scheme)]) -> Cle
     except InvalidTokenError:
         raise credentials_exception from None
 
-    user = clerk_users().get(username)
+    user = clerk_users_or_empty().get(username)
+    if user is None:
+        from permit_pilot_api.clerk_accounts import load_clerk
+
+        user = load_clerk(username)
     if user is None:
         raise credentials_exception
     return ClerkUser(username=user.username, full_name=user.full_name, role=user.role)

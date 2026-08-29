@@ -129,7 +129,7 @@ function RunRow({
           </span>
         </div>
         <Link
-          to={`/cases/${run.case_id}?tab=audit`}
+          to={`/cases/${run.case_id}?tab=history`}
           className="text-xs text-pp-accent hover:underline mt-2 inline-block"
           onClick={(event) => event.stopPropagation()}
         >

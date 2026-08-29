@@ -22,7 +22,7 @@ export default function ActivityFeed({ items, emptyMessage = "No audit events ye
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
                 <Link
-                  to={`/cases/${item.case_id}?tab=audit&from=activity`}
+                  to={`/cases/${item.case_id}?tab=history&from=activity`}
                   className="text-sm font-semibold text-pp-navy hover:text-pp-accent"
                 >
                   {item.address}
@@ -35,7 +35,7 @@ export default function ActivityFeed({ items, emptyMessage = "No audit events ye
               <p className="text-sm text-pp-muted mt-1">{summary}</p>
               {truncated && (
                 <Link
-                  to={`/cases/${item.case_id}?tab=audit&from=activity`}
+                  to={`/cases/${item.case_id}?tab=history&from=activity`}
                   className="text-xs text-pp-accent hover:underline mt-1 inline-block"
                 >
                   Read full entry in case audit

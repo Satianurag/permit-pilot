@@ -90,6 +90,10 @@ if _static_root and Path(_static_root).is_dir():
     _LANDING_ENTRY = Path(_static_root) / "index.html"
     _SPA_PREFIXES = (
         "login",
+        "work",
+        "find",
+        "intake",
+        "more",
         "dashboard",
         "activity",
         "tasks",

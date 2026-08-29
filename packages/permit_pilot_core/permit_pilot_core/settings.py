@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     clerk_bootstrap_full_name: str = Field(default="", alias="CLERK_BOOTSTRAP_FULL_NAME")
     clerk_bootstrap_role: str = Field(default="clerk", alias="CLERK_BOOTSTRAP_ROLE")
     clerk_users_json: str = Field(default="", alias="CLERK_USERS")
+    google_signin_client_id: str = Field(default="", alias="GOOGLE_SIGNIN_CLIENT_ID")
 
     nyc_open_data_base: str = Field(
         default="https://data.cityofnewyork.us/resource",
@@ -45,6 +46,7 @@ class Settings(BaseSettings):
     nyc_dataset_permits: str = Field(default="rbx6-tga4", alias="NYC_DATASET_PERMITS")
     nyc_dataset_filings: str = Field(default="w9ak-ipjd", alias="NYC_DATASET_FILINGS")
     nyc_dataset_dob_violations: str = Field(default="3h2n-5cm9", alias="NYC_DATASET_DOB_VIOLATIONS")
+    nyc_dataset_dob_safety: str = Field(default="855j-jady", alias="NYC_DATASET_DOB_SAFETY")
     nyc_dataset_dep_ecb: str = Field(default="skr7-cxt3", alias="NYC_DATASET_DEP_ECB")
     nyc_dataset_landmarks: str = Field(default="gpmc-yuvp", alias="NYC_DATASET_LANDMARKS")
     nyc_dataset_fdny_violations: str = Field(default="bi53-yph3", alias="NYC_DATASET_FDNY_VIOLATIONS")
